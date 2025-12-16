@@ -1,5 +1,5 @@
 import os
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 from langgraph.graph import StateGraph, END
 
 # 核心依赖
@@ -7,12 +7,11 @@ from core.rotator import GeminiKeyRotator
 from tools.memory import VectorMemoryTool
 from tools.search import GoogleSearchTool
 
-# Agent 定义 (Updated Imports)
+# Agent 定义
 from agents.agents import ResearcherAgent, AgentGraphState
-# 新增: 从独立模块导入 Orchestrator
 from agents.orchestrator.orchestrator import OrchestratorAgent
 
-# 子图构建器 (Crew Subgraphs)
+# 子图构建器
 from agents.crews.coding_crew.graph import build_coding_crew_graph
 from agents.crews.data_crew.graph import build_data_crew_graph
 from agents.crews.content_crew.graph import build_content_crew_graph
@@ -26,7 +25,6 @@ def load_prompt_file(path: str) -> str:
     if os.path.exists(path):
         with open(path, 'r', encoding='utf-8') as f: 
             return f.read().strip()
-    # 如果找不到，尝试打印警告，方便调试路径
     print(f"⚠️ Warning: Prompt file not found at {path}")
     return ""
 
@@ -40,7 +38,10 @@ def common_input_mapper(state: AgentGraphState) -> Dict[str, Any]:
     将主图状态映射为所有 Crew 都兼容的输入格式。
     """
     project = state["project_state"]
-    instruction = project.execution_plan[0]['instruction'] if project.execution_plan else "No instruction"
+    # [Updated] 从 next_step 获取当前单步指令
+    instruction = "No instruction"
+    if project.next_step and "instruction" in project.next_step:
+        instruction = project.next_step["instruction"]
     
     return {
         "task_id": project.task_id,
@@ -62,21 +63,16 @@ def coding_output_mapper(state: AgentGraphState, output: Dict[str, Any]) -> Dict
     project.code_blocks["coding_crew"] = code
     project.full_chat_history.append({"role": "model", "parts": [{"text": f"[Coding Crew Output]\n{code}"}]})
     
-    if project.execution_plan: 
-        project.execution_plan.pop(0)
     return {"project_state": project}
 
 def data_output_mapper(state: AgentGraphState, output: Dict[str, Any]) -> Dict[str, Any]:
     """处理 Data Crew 的输出"""
     project = state["project_state"]
-    # 优先取 final_report，如果没有(比如被迫中断)，则取草稿
     report = output.get("final_report") or output.get("analysis_draft", "")
     
     project.final_report = report
     project.full_chat_history.append({"role": "model", "parts": [{"text": f"[Data Crew Output]\n{report}"}]})
     
-    if project.execution_plan: 
-        project.execution_plan.pop(0)
     return {"project_state": project}
 
 def content_output_mapper(state: AgentGraphState, output: Dict[str, Any]) -> Dict[str, Any]:
@@ -87,38 +83,48 @@ def content_output_mapper(state: AgentGraphState, output: Dict[str, Any]) -> Dic
     project.final_report = content
     project.full_chat_history.append({"role": "model", "parts": [{"text": f"[Content Crew Output]\n{content}"}]})
     
-    if project.execution_plan: 
-        project.execution_plan.pop(0)
     return {"project_state": project}
 
 
 # =======================================================
-# 2. 路由逻辑
+# 2. 路由逻辑 (Refactored)
 # =======================================================
 
 def route_next_step(state: AgentGraphState) -> str:
+    """
+    基于 Supervisor 决策的动态路由。
+    """
     current_state = state["project_state"]
     
-    # HITL 关键点: 优先处理用户反馈
-    if current_state.user_feedback_queue: 
-        print("🚦 Routing to Orchestrator for Re-planning (User Feedback detected)")
-        return "orchestrator"
+    # 1. 优先检查 Router 决策
+    decision = current_state.router_decision
     
-    # 计划执行完毕
-    if not current_state.execution_plan: 
+    if decision == "finish":
+        print("🏁 Project Completed. Routing to END.")
         return "end"
-        
-    # 获取下一个 Agent 名称
-    next_agent = current_state.execution_plan[0].get('agent', '').lower()
     
-    # 合法的路由目标
+    if decision == "human":
+        print("🚦 Routing to Orchestrator (Human Intervention Needed)")
+        return "orchestrator"
+        
+    # 2. 获取目标 Agent (从 next_step 读取)
+    next_step = current_state.next_step
+    if not next_step:
+        print("⚠️ No next_step found despite 'continue'. Routing back to Orchestrator.")
+        current_state.user_feedback_queue = "System Error: Missing next_step configuration."
+        return "orchestrator"
+        
+    next_agent = next_step.get("agent_name", "").lower()
+    
+    # 3. 验证并路由
     valid_routes = ["researcher", "coding_crew", "data_crew", "content_crew"]
     
     if next_agent in valid_routes: 
+        print(f"👉 Routing to: {next_agent}")
         return next_agent
     
-    # 未知 Agent，回退到调度器
-    print(f"⚠️ Unknown agent '{next_agent}' in plan. Routing back to Orchestrator.")
+    # 4. 未知 Agent 处理
+    print(f"⚠️ Unknown agent '{next_agent}'. Routing back to Orchestrator.")
     current_state.user_feedback_queue = f"Unknown agent in plan: {next_agent}"
     return "orchestrator"
 
@@ -127,12 +133,16 @@ def route_next_step(state: AgentGraphState) -> str:
 # 3. 构建主图
 # =======================================================
 
-def build_agent_workflow(rotator: GeminiKeyRotator, memory_tool: VectorMemoryTool, search_tool: GoogleSearchTool) -> StateGraph:
+def build_agent_workflow(
+    rotator: GeminiKeyRotator, 
+    memory_tool: VectorMemoryTool, 
+    search_tool: GoogleSearchTool,
+    checkpointer: Optional[Any] = None 
+) -> StateGraph:
     
-    # 1. 初始化通用 Prompt
-    # [重构]: 路径更新为 agents/orchestrator/prompts/...
+    # 1. 初始化 Prompt
     orch_prompt = load_prompt_file("agents/orchestrator/prompts/orchestrator.md")
-    res_prompt = load_prompt_file("prompts/researcher_prompt.md") # Researcher 目前仍保留在旧位置
+    res_prompt = load_prompt_file("prompts/researcher_prompt.md")
     
     # 2. 初始化单点 Agent
     orchestrator = OrchestratorAgent(rotator, orch_prompt)
@@ -149,7 +159,7 @@ def build_agent_workflow(rotator: GeminiKeyRotator, memory_tool: VectorMemoryToo
     workflow.add_node("orchestrator", orchestrator.run)
     workflow.add_node("researcher", researcher.run)
     
-    # 5. 注册子图节点 (使用 Wrapper 函数处理异步调用和状态映射)
+    # 5. 注册子图节点
     async def call_coding(state: AgentGraphState):
         res = await coding_app.ainvoke(common_input_mapper(state))
         return coding_output_mapper(state, res)
@@ -182,12 +192,12 @@ def build_agent_workflow(rotator: GeminiKeyRotator, memory_tool: VectorMemoryToo
         }
     )
     
-    # 所有工作节点执行完后，都闭环回到 Orchestrator 进行检查或下一步规划
+    # 闭环：所有工作节点完成后，必须回到 Orchestrator 进行下一轮决策
     for node in ["researcher", "coding_crew", "data_crew", "content_crew"]:
         workflow.add_edge(node, "orchestrator")
     
-    # 提示：如果需要实现真正的 CLI 交互式 HITL，
-    # 可以在这里添加 checkpointer 或 interrupt_before=["orchestrator"]
-    # workflow.compile(interrupt_before=["orchestrator"])
-    
-    return workflow.compile()
+    # [Updated] 编译时传入 checkpointer 和中断点配置
+    return workflow.compile(
+        checkpointer=checkpointer,
+        interrupt_before=["coding_crew", "data_crew"]
+    )
