@@ -6,4 +6,4 @@ tiktoken
 python-dotenv
 fastapi
 uvicorn
-httpx
+sse-starlette
