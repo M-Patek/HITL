@@ -28,7 +28,7 @@ class OrchestratorAgent(BaseAgent):
 
         try:
             with open(prompt_path, "r", encoding="utf-8") as f:
-                base_prompt = f.read()
+                base_prompt = f.read().strip() # Added .strip() to clean up whitespace
         except FileNotFoundError:
             print(f"Error: Prompt file not found at {prompt_path}")
             base_prompt = "You are an expert workflow orchestrator." # Fallback prompt
@@ -38,21 +38,22 @@ class OrchestratorAgent(BaseAgent):
             [f"- {crew_name}: {crew.description}" for crew_name, crew in self.all_crews.items()]
         ) + "\n"
 
-        # Build the final prompt string with all necessary context
-        # FIXED: Replacing backslashes in prompt_dir to avoid SyntaxError on Windows
-        self.prompt = f"""
-            {base_prompt}
-            
-            # Available Crews
-            You MUST select a crew from the list below:
-            {available_crews}
-            
-            # Context
-            The full directory for the crew prompts is at: {prompt_dir.replace('\\', '/')}
+        # **最终修复：避免复杂的 f-string，改用传统拼接**
+        # 避免在多行 f-string 中嵌入包含反斜杠的变量
+        final_prompt = f"""
+{base_prompt}
+
+# Available Crews
+You MUST select a crew from the list below:
+{available_crews}
+
+# Context
+The full directory for the crew prompts is at: {prompt_dir.replace('\\', '/')}
         """
-        return self.prompt
+        self.prompt = final_prompt.strip()
+        return self.prompt # 返回 self.prompt
 
-
+    # ... (rest of the class methods)
     def run(self, state: State, user_input: str) -> Dict[str, Any]:
         """
         Processes the user's request and determines the next step.
