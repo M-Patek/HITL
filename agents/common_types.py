@@ -3,7 +3,6 @@ from typing import TypedDict, List, Dict, Any
 # =======================================================
 # 通用状态定义 (Base Types)
 # =======================================================
-# 这里定义了所有 Agent 或 Subgraph 可能共用的基础字段。
 
 class BaseAgentState(TypedDict):
     """
@@ -14,3 +13,12 @@ class BaseAgentState(TypedDict):
     task_id: str
     user_input: str
     full_chat_history: List[Dict[str, Any]]
+
+# [Fix] 新增 BaseAgent 类定义
+class BaseAgent:
+    """所有 Agent 的基类，负责持有 LLM Client"""
+    def __init__(self, llm_client: Any):
+        self.llm_client = llm_client
+
+# [Fix] 新增 State 类型别名
+State = Dict[str, Any]
