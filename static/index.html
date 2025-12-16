@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gemini Agent Swarm - HITL Console</title>
+    <style>
+        :root {
+            --bg-color: #1e1e1e;
+            --term-bg: #2d2d2d;
+            --text-color: #e0e0e0;
+            --accent: #4caf50;
+            --danger: #f44336;
+            --info: #2196f3;
+        }
+        body {
+            font-family: 'Segoe UI', monospace, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            box-sizing: border-box;
+        }
+        h1 { margin-top: 0; font-size: 1.5rem; color: var(--accent); }
+        
+        .controls {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 15px;
+            flex-wrap: wrap;
+        }
+        input[type="text"] {
+            flex: 1;
+            padding: 10px;
+            border-radius: 4px;
+            border: 1px solid #444;
+            background: #333;
+            color: #fff;
+            min-width: 300px;
+        }
+        button {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-weight: bold;
+            transition: background 0.2s;
+        }
+        #btn-submit { background-color: var(--accent); color: #000; }
+        #btn-submit:hover { background-color: #43a047; }
+        #btn-submit:disabled { background-color: #555; cursor: not-allowed; }
+        
+        #log-container {
+            flex: 1;
+            background-color: var(--term-bg);
+            border-radius: 6px;
+            padding: 15px;
+            overflow-y: auto;
+            border: 1px solid #444;
+            font-family: 'Consolas', 'Monaco', monospace;
+            white-space: pre-wrap;
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+        }
+
+        .log-entry { padding: 4px 0; border-bottom: 1px solid #3a3a3a; }
+        .log-time { color: #888; font-size: 0.8em; margin-right: 8px; }
+        
+        .type-update { color: #aaa; }
+        .type-node_finished { color: var(--info); font-weight: bold; }
+        .type-artifact_code { color: #ce9178; background: #252526; padding: 5px; border-radius: 3px; }
+        .type-final_report { color: var(--accent); border: 1px solid var(--accent); padding: 10px; margin: 10px 0; background: #1e3a20; }
+        .type-error { color: var(--danger); font-weight: bold; }
+        .type-finish { color: var(--accent); font-weight: bold; text-align: center; margin-top: 20px; }
+
+        /* Cursor blinking animation */
+        .cursor::after {
+            content: '▋';
+            animation: blink 1s step-end infinite;
+        }
+        @keyframes blink { 50% { opacity: 0; } }
+    </style>
+</head>
+<body>
+
+    <h1>🤖 Gemini Multi-Agent Swarm (HITL)</h1>
+    
+    <div class="controls">
+        <input type="text" id="input-task" placeholder="Enter your complex task here..." value="Analyze the future of AI agents">
+        <input type="text" id="input-thread" placeholder="Thread ID (optional)" style="flex: 0 0 150px;">
+        <button id="btn-submit" onclick="startTask()">🚀 Start Mission</button>
+    </div>
+
+    <div id="log-container">
+        <div class="log-entry" style="color: #666;">System ready. Waiting for input...</div>
+    </div>
+
+    <script>
+        const logContainer = document.getElementById('log-container');
+        const btnSubmit = document.getElementById('btn-submit');
+        
+        async function startTask() {
+            const taskInput = document.getElementById('input-task').value.trim();
+            const threadId = document.getElementById('input-thread').value.trim() || `web-thread-${Date.now()}`;
+            
+            if (!taskInput) return alert("Please enter a task.");
+
+            // UI Reset
+            btnSubmit.disabled = true;
+            logContainer.innerHTML = '';
+            appendLog('system', `🚀 Starting task on thread: ${threadId}...`);
+
+            try {
+                const response = await fetch('/stream_task', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ user_input: taskInput, thread_id: threadId })
+                });
+
+                if (!response.ok) throw new Error(`HTTP Error: ${response.status}`);
+
+                // Setup Stream Reader
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                let buffer = '';
+
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+
+                    const chunk = decoder.decode(value, { stream: true });
+                    buffer += chunk;
+                    
+                    // Process complete SSE messages (separated by double newline)
+                    const parts = buffer.split('\n\n');
+                    buffer = parts.pop(); // Keep incomplete part in buffer
+
+                    for (const part of parts) {
+                        if (!part.trim()) continue;
+                        parseSSE(part);
+                    }
+                }
+
+            } catch (e) {
+                appendLog('error', `❌ Connection Error: ${e.message}`);
+            } finally {
+                btnSubmit.disabled = false;
+                appendLog('system', '--- Stream Closed ---');
+            }
+        }
+
+        function parseSSE(block) {
+            const lines = block.split('\n');
+            let eventType = 'update';
+            let data = null;
+
+            for (const line of lines) {
+                if (line.startsWith('event: ')) eventType = line.substring(7).trim();
+                else if (line.startsWith('data: ')) {
+                    try {
+                        data = JSON.parse(line.substring(6));
+                    } catch (e) {
+                        data = line.substring(6);
+                    }
+                }
+            }
+
+            if (data) handleEvent(eventType, data);
+        }
+
+        function handleEvent(type, data) {
+            // Map SSE events to UI styles
+            if (type === 'end') {
+                appendLog('finish', data);
+                return;
+            }
+            if (type === 'error') {
+                appendLog('error', typeof data === 'string' ? data : JSON.stringify(data));
+                return;
+            }
+
+            // Custom logic for data payloads
+            if (data.event_type === 'node_finished') {
+                const info = data.data;
+                appendLog('node_finished', `✅ [${info.node}] completed. Decision: ${info.router_decision}`);
+            } 
+            else if (data.event_type === 'artifact_code') {
+                appendLog('artifact_code', `📜 Code Generated:\n${data.data}`);
+            }
+            else if (data.event_type === 'final_report') {
+                appendLog('final_report', `📄 FINAL REPORT:\n${data.data}`);
+            }
+            else {
+                // Default / Status updates
+                const msg = typeof data === 'string' ? data : (data.data || JSON.stringify(data));
+                appendLog('update', `ℹ️ ${msg}`);
+            }
+        }
+
+        function appendLog(type, text) {
+            const div = document.createElement('div');
+            div.className = `log-entry type-${type}`;
+            
+            const time = new Date().toLocaleTimeString().split(' ')[0];
+            div.innerHTML = `<span class="log-time">[${time}]</span> ${text}`;
+            
+            logContainer.appendChild(div);
+            logContainer.scrollTop = logContainer.scrollHeight;
+        }
+    </script>
+</body>
+</html>
