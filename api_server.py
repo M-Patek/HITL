@@ -1,79 +1,75 @@
 import json
-import os
+import asyncio
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
-from dotenv import load_dotenv
+from fastapi.staticfiles import StaticFiles
+from sse_starlette.sse import EventSourceResponse
 
+# 导入核心业务逻辑
 from core.api_models import TaskRequest
-from workflow.engine import workflow_stream_generator
+from workflow.engine import run_workflow
 
-# 加载环境变量
-load_dotenv()
+app = FastAPI(title="Gemini Agent System API")
 
-# 初始化 FastAPI 实例
-app = FastAPI(
-    title="Gemini Multi-Agent Swarm API",
-    description="Backend API for HITL Multi-Agent System",
-    version="1.0.0"
-)
-
-# 配置 CORS
+# 1. 配置 CORS (允许前端跨域访问)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["*"],  # 生产环境建议改为具体的域名
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-@app.get("/")
-async def root():
-    """根路径健康检查"""
-    return {"status": "running", "service": "Gemini Agent Swarm API"}
+# 2. 挂载静态文件目录 (优化建议已采纳)
+# 访问地址: http://localhost:8000/static/index.html
+app.mount("/static", StaticFiles(directory="static"), name="static")
 
 @app.post("/stream_task")
 async def stream_task(request: TaskRequest):
     """
-    SSE (Server-Sent Events) 端点。
-    接收任务请求，实时推送 Agent 工作流的执行状态和结果。
+    SSE 流式接口: 接收用户任务，实时推送 Agent 执行过程。
     """
+    
     async def event_generator():
-        # 如果未提供 thread_id，生成默认 ID
-        thread_id = request.thread_id or "default_thread_1"
-        
-        # 调用核心引擎的生成器
-        async for event in workflow_stream_generator(request.user_input, thread_id):
-            # 获取内部事件类型和数据
-            internal_type = event.get("event_type", "status")
-            data = event.get("data")
-            
-            # --- 事件映射逻辑 ---
-            # 根据 API 规范，将内部事件映射为前端约定的: update, result, error, end
-            sse_event = "update" # 默认为更新状态
-            
-            if internal_type == "final_report":
-                sse_event = "result" # 最终结果
-            elif internal_type == "error":
-                sse_event = "error"  # 错误
-            elif internal_type == "finish":
-                sse_event = "end"    # 流程结束
-                
-            # 序列化数据为 JSON 字符串
-            try:
-                # ensure_ascii=False 保证中文正常显示
-                json_data = json.dumps(data, ensure_ascii=False)
-            except Exception:
-                json_data = str(data)
-            
-            # 构造 SSE 格式数据 (event: ... \n data: ... \n\n)
-            yield f"event: {sse_event}\ndata: {json_data}\n\n"
+        """
+        将 workflow engine 的生成器转换为 sse-starlette 兼容的格式
+        """
+        # 获取工作流生成器
+        workflow_stream = run_workflow(
+            user_input=request.user_input, 
+            thread_id=request.thread_id
+        )
 
-    # 返回流式响应，Content-Type 必须为 text/event-stream
-    return StreamingResponse(event_generator(), media_type="text/event-stream")
+        try:
+            async for event_type, data in workflow_stream:
+                # 检查客户端是否断开连接 (sse-starlette 会处理大部分情况，但双保险更稳)
+                if await app.router.is_disconnected(request):
+                    print("⚠️ Client disconnected, stopping workflow.")
+                    break
+                
+                # 构造 SSE 消息对象
+                # sse-starlette 会自动处理 "event: ...\ndata: ...\n\n" 的格式
+                yield {
+                    "event": event_type,
+                    "data": json.dumps(data, ensure_ascii=False)
+                }
+                
+                # 极短的 yield 让渡，避免 event loop 阻塞
+                await asyncio.sleep(0.01)
+
+        except Exception as e:
+            # 发生未捕获异常时，推送 error 事件给前端
+            yield {
+                "event": "error",
+                "data": json.dumps({"error": str(e)}, ensure_ascii=False)
+            }
+
+    # 使用 EventSourceResponse 包装生成器，自动处理 Content-Type 和 Connection 头
+    return EventSourceResponse(event_generator())
 
 if __name__ == "__main__":
     import uvicorn
-    # 允许通过直接运行脚本启动服务 (开发模式)
     # 启动命令: python api_server.py
+    print("🚀 Starting API Server on http://0.0.0.0:8000")
+    print("📱 Frontend available at http://0.0.0.0:8000/static/index.html")
     uvicorn.run(app, host="0.0.0.0", port=8000)
