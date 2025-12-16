@@ -1,6 +1,7 @@
 import os
 from typing import Dict, Any, List, Optional
-from core.models import LLMClient
+# 导入修复：将 LLMClient 替换为正确的 LLMApiClient
+from core.models import LLMApiClient 
 from agents.common_types import BaseAgent, State
 from workflow.graph import GraphDefinition
 
@@ -12,7 +13,8 @@ class OrchestratorAgent(BaseAgent):
     suited to handle the task.
     """
 
-    def __init__(self, llm_client: LLMClient, all_crews: Dict[str, GraphDefinition]):
+    # 变量类型修复：将 llm_client 的类型提示从 LLMClient 修改为 LLMApiClient
+    def __init__(self, llm_client: LLMApiClient, all_crews: Dict[str, GraphDefinition]):
         super().__init__(llm_client)
         self.all_crews = all_crews
         self.system_prompt = self._load_system_prompt()
@@ -42,7 +44,7 @@ class OrchestratorAgent(BaseAgent):
         # 确保路径分隔符不会引起问题
         safe_prompt_dir = prompt_dir.replace('\\', '/')
 
-        # **最终修复：使用传统字符串拼接和 format() 来避免 f-string 解析问题**
+        # 使用传统字符串拼接和 format() 来避免 f-string 解析问题
         final_prompt_template = """
 {base_prompt}
 
