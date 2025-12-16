@@ -78,6 +78,9 @@ def build_agent_workflow(rotator: GeminiKeyRotator, memory_tool: VectorMemoryToo
     researcher_instruction = load_prompt_file(os.path.join(base_prompt_path, "researcher_prompt.md"))
     analyst_instruction = load_prompt_file(os.path.join(base_prompt_path, "analyst_prompt.md"))
     
+    # [UPDATED] 加载新增的 Coding Crew Prompt
+    coding_crew_instruction = load_prompt_file(os.path.join(base_prompt_path, "coding_crew_prompt.md"))
+    
     # 2. 初始化所有 Agent 实例
     
     # 调度器 (大脑)
@@ -87,8 +90,8 @@ def build_agent_workflow(rotator: GeminiKeyRotator, memory_tool: VectorMemoryToo
     researcher_agent_instance = ResearcherAgent(rotator, memory_tool, search_tool, researcher_instruction) 
     analyst_agent_instance = AnalystAgent(rotator, analyst_instruction)
     
-    # 初始化 CodingCrewAgent (不需要 Prompt 文件，因为它内部管理 CrewAI)
-    coding_crew_instance = CodingCrewAgent(rotator)
+    # 初始化 CodingCrewAgent，现在传入 Prompt 指令
+    coding_crew_instance = CodingCrewAgent(rotator, coding_crew_instruction)
     
     # 3. 定义图和状态
     workflow = StateGraph(AgentGraphState)
