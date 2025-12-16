@@ -30,7 +30,7 @@ Approve (通过): 只有当报告既有扎实的数据支撑，又有清晰的�
 
 你必须且只能输出一段严格的 JSON，格式如下：
 
-{
+{{
     "status": "approve", // 或 "reject"
     "feedback": "如果是 reject，请指出缺失的商业视角。如果是 approve，简短确认。"
-}
+}}
