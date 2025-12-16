@@ -1,21 +1,29 @@
+from typing import str
+
 # =======================================================
-# GoogleSearchTool (模拟外部搜索)
+# GoogleSearchTool
 # =======================================================
 
 class GoogleSearchTool:
     """
-    封装 Google 搜索工具的能力（目前为模拟状态）。
-    在生产环境中，将集成 Google Search API 或自定义搜索服务。
+    外部搜索工具封装。
+    目前处于模拟模式 (Mock Mode)。
     """
     
     def search(self, query: str) -> str:
-        """执行 Google 搜索并返回结果摘要。"""
-        print(f"🌐 正在执行搜索查询: {query[:30]}...")
+        """
+        执行搜索并返回摘要。
+        """
+        print(f"🌐 [Search Tool] Searching for: {query[:40]}...")
         
-        # 模拟返回不同的结果
-        if "电动汽车" in query or "增长趋势" in query:
-             return "搜索结果：2024年Q3电动汽车市场增长集中在亚洲和欧洲，比亚迪和特斯拉是全球主要增长驱动力。比亚迪的欧洲市场份额持续增加。"
-        elif "功耗数据" in query:
-             return "搜索结果：M4 芯片的功耗数据官方未公布，但第三方评测显示其能效比 M3 提升 30%。"
+        # 模拟逻辑：根据关键词返回不同假数据
+        q_lower = query.lower()
+        
+        if "python" in q_lower or "code" in q_lower:
+             return "Result: Python 3.12 was released with significant performance improvements. asyncio has new features."
+        elif "data" in q_lower or "trend" in q_lower:
+             return "Result: Global data market is growing by 20% YoY. AI adoption is the key driver."
+        elif "story" in q_lower or "write" in q_lower:
+             return "Result: Hero's Journey is a common template for storytelling. Conflict drives the plot."
         else:
-             return "搜索结果：未找到特定数据，请优化查询。"
+             return "Result: No specific data found, but general knowledge suggests this is a popular topic."
