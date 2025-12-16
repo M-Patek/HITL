@@ -1,0 +1,9 @@
+langgraph
+google-genai
+pydantic
+pinecone-client
+tiktoken
+python-dotenv
+fastapi
+uvicorn
+httpx
