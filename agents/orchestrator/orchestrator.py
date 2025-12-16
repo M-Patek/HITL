@@ -1,7 +1,6 @@
 import os
 from typing import Dict, Any, List, Optional
-# 导入修复：将 LLMClient 替换为正确的 LLMApiClient
-from core.models import LLMApiClient 
+# [Fix] 移除了导致报错的 LLMClient/LLMApiClient 导入
 from agents.common_types import BaseAgent, State
 from workflow.graph import GraphDefinition
 
@@ -13,8 +12,8 @@ class OrchestratorAgent(BaseAgent):
     suited to handle the task.
     """
 
-    # 变量类型修复：将 llm_client 的类型提示从 LLMClient 修改为 LLMApiClient
-    def __init__(self, llm_client: LLMApiClient, all_crews: Dict[str, GraphDefinition]):
+    # [Fix] 将 llm_client 的类型提示改为 Any，避免 Import Error
+    def __init__(self, llm_client: Any, all_crews: Dict[str, GraphDefinition]):
         super().__init__(llm_client)
         self.all_crews = all_crews
         self.system_prompt = self._load_system_prompt()
@@ -41,10 +40,10 @@ class OrchestratorAgent(BaseAgent):
             [f"- {crew_name}: {crew.description}" for crew_name, crew in self.all_crews.items()]
         ) + "\n"
         
-        # 确保路径分隔符不会引起问题
+        # [Fix] 确保路径分隔符不会引起问题
         safe_prompt_dir = prompt_dir.replace('\\', '/')
 
-        # 使用传统字符串拼接和 format() 来避免 f-string 解析问题
+        # [Fix] 使用传统字符串拼接和 format() 来避免 f-string 解析问题 (SyntaxError)
         final_prompt_template = """
 {base_prompt}
 
@@ -69,14 +68,9 @@ The full directory for the crew prompts is at: {safe_prompt_dir}
     def run(self, state: State, user_input: str) -> Dict[str, Any]:
         """
         Processes the user's request and determines the next step.
-
-        The Orchestrator's job is to select the most appropriate crew 
-        (based on the Crew Selection Tool) and assign the original 
-        user request to that crew's entry point.
         """
         
         # 1. Prepare message history
-        # For the orchestrator, we only provide the initial user prompt.
         messages = [
             {"role": "system", "content": self.system_prompt},
             {"role": "user", "content": user_input},
@@ -110,8 +104,6 @@ The full directory for the crew prompts is at: {safe_prompt_dir}
         }
         
         # 3. Call the LLM with the tool
-        # The Orchestrator's job is always to call this tool.
-        # We rely on the model to use the tool correctly to proceed.
         response = self.llm_client.generate_with_tool_use(
             messages=messages,
             tools=[tool_schema]
@@ -124,7 +116,6 @@ The full directory for the crew prompts is at: {safe_prompt_dir}
                 crew_name = tool_call.function.args.get("crew_name")
                 reasoning = tool_call.function.args.get("reasoning", "No reasoning provided.")
                 
-                # Check if the selected crew is valid
                 if crew_name in self.all_crews:
                     print(f"\n--- Orchestrator Selected Crew: {crew_name} (Reason: {reasoning}) ---")
                     return {
@@ -133,15 +124,13 @@ The full directory for the crew prompts is at: {safe_prompt_dir}
                         "orchestrator_reasoning": reasoning,
                     }
                 else:
-                    # Fallback if model selects an invalid crew name
                     return {
                         "error": f"Orchestrator selected an invalid crew: {crew_name}. Available crews: {crew_names_str}",
-                        "next_crew": "human_intervention" # Signal for a manual review/correction
+                        "next_crew": "human_intervention"
                     }
         else:
-            # Fallback if model failed to use the tool
             print("\n--- Orchestrator Failed to Select Crew (Model didn't use the tool) ---")
             return {
                 "error": "Orchestrator failed to use the 'select_crew' tool.",
-                "next_crew": "human_intervention" # Signal for a manual review/correction
+                "next_crew": "human_intervention"
             }
