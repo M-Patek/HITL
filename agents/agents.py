@@ -1,6 +1,6 @@
 from typing import TypedDict, List, Dict, Any, Optional
 from core.rotator import GeminiKeyRotator
-from core.models import ProjectState, ExecutionPlan
+from core.models import ProjectState
 from tools.memory import VectorMemoryTool
 from tools.search import GoogleSearchTool
 
@@ -17,72 +17,8 @@ class AgentGraphState(TypedDict):
 
 
 # =======================================================
-# 1. Orchestrator Agent (调度器)
-# =======================================================
-
-class OrchestratorAgent:
-    """
-    负责任务分解、动态规划和错误处理的核心大脑。
-    """
-    def __init__(self, rotator: GeminiKeyRotator, system_instruction: str):
-        self.rotator = rotator
-        self.system_instruction = system_instruction
-        self.model = "gemini-2.5-flash" 
-        
-    def run(self, state: AgentGraphState) -> AgentGraphState:
-        current_state = state["project_state"]
-        print(f"\n⚙️ [Orchestrator] 正在分析项目状态...")
-        
-        # 构建上下文
-        context_str = f"Task: {current_state.user_input}\n"
-        if current_state.research_summary:
-            context_str += f"Research Summary: {current_state.research_summary[:200]}...\n"
-        if current_state.last_error:
-            context_str += f"Last Error: {current_state.last_error}\n"
-        
-        # 简化版 Prompt 逻辑 (实际使用时可注入更多细节)
-        prompt = f"""
-        基于以下状态生成 JSON 执行计划: 
-        {context_str}
-        
-        可用 Agent: 
-        - 'researcher': 获取外部信息
-        - 'coding_crew': 编写和审查代码 (Subgraph)
-        - 'data_crew': 数据分析和商业洞察 (Subgraph)
-        - 'content_crew': 创意写作和编辑 (Subgraph)
-        """
-
-        try:
-            response_text = self.rotator.call_gemini_with_rotation(
-                model_name=self.model,
-                contents=[{"role": "user", "parts": [{"text": prompt}]}],
-                system_instruction=self.system_instruction,
-                response_schema=ExecutionPlan
-            )
-            
-            if response_text:
-                plan_data = ExecutionPlan.model_validate_json(response_text)
-                current_state.execution_plan = [step.model_dump() for step in plan_data.next_steps]
-                
-                # 重置错误和反馈状态
-                current_state.user_feedback_queue = None
-                current_state.last_error = None
-                
-                print(f"✅ [Orchestrator] 计划已更新: 下一步执行 {len(plan_data.next_steps)} 个步骤。")
-            else:
-                raise ValueError("Orchestrator API 返回为空")
-
-        except Exception as e:
-            print(f"❌ [Orchestrator] 规划失败: {e}")
-            current_state.last_error = str(e)
-            # 在严重错误时清空计划，防止死循环
-            current_state.execution_plan = []
-
-        return {"project_state": current_state}
-
-
-# =======================================================
 # 2. Researcher Agent (研究员)
+#    Orchestrator 已移动至 agents/orchestrator/
 # =======================================================
 
 class ResearcherAgent:
@@ -95,7 +31,7 @@ class ResearcherAgent:
         self.search_tool = search_tool
         self.system_instruction = system_instruction
 
-    def run(self, state: AgentGraphState) -> AgentGraphState:
+    def run(self, state: AgentGraphState) -> Dict[str, Any]:
         current_state = state["project_state"]
         if not current_state.execution_plan: 
             return state
