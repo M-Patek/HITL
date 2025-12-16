@@ -84,18 +84,30 @@ async def run_workflow(
             for node_name, node_state in event.items():
                 
                 # ================= [Fix Start] =================
-                # 递归解包 tuple，直到找到 dict 或无法解包为止
-                # 解决部分环境下 langgraph 返回 nested tuple 的问题
-                while isinstance(node_state, tuple):
-                    if len(node_state) > 0:
-                        node_state = node_state[0]
-                    else:
-                        break # 空元组，停止解包
+                # 策略: 尝试解包，如果解包失败或为空，则直接从 Checkpoint 获取最新状态
+                # 这样可以兜底解决 LangGraph 版本差异导致的 tuple 问题
                 
-                if not isinstance(node_state, dict):
-                    # 如果还不是 dict，打印具体内容以便排查
-                    print(f"⚠️ Warning: Expected dict for node_state but got {type(node_state)}. Content: {node_state}. Skipping.")
-                    continue
+                # 1. 尝试解包 tuple (如果是嵌套元组)
+                temp_state = node_state
+                while isinstance(temp_state, tuple):
+                    if len(temp_state) > 0:
+                        temp_state = temp_state[0]
+                    else:
+                        break # 空元组，无法继续解包
+                
+                # 2. 检查有效性: 是否为包含 project_state 的字典
+                if isinstance(temp_state, dict) and 'project_state' in temp_state:
+                    node_state = temp_state
+                else:
+                    # 3. 兜底: 从内存快照读取最新状态
+                    # 只要节点事件触发了，Checkpoint 里一定有最新数据
+                    print(f"⚠️ [Engine] Node '{node_name}' output is weird ({type(node_state)}). Fetching latest state from Checkpoint...")
+                    latest_snapshot = _app.get_state(config)
+                    if latest_snapshot.values and 'project_state' in latest_snapshot.values:
+                        node_state = latest_snapshot.values
+                    else:
+                        print(f"⚠️ [Engine] Failed to recover state for {node_name}. Skipping.")
+                        continue
                 # ================= [Fix End] =================
 
                 project_state = node_state.get('project_state')
