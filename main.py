@@ -22,6 +22,9 @@ def test_platform_workflow():
     """
     print("\n--- 正在初始化 Agent 平台 ---")
     
+    memory_tool = None # 预定义，确保清理步骤可以访问
+    final_project_state_2 = None # 预定义，确保清理步骤可以访问 task_id
+    
     try:
         # 1. 实例化核心工具和资源
         rotator = GeminiKeyRotator(GEMINI_API_KEYS)
@@ -95,9 +98,20 @@ def test_platform_workflow():
             print("请检查控制台，观察 Orchestrator 如何从 Orchestrator -> Researcher -> Analyst 进行重定向。")
         else:
             print("❌ 协作失败，无法注入用户反馈。")
+            final_project_state_2 = final_project_state # 如果第二轮未运行，使用第一轮的状态进行清理
 
     except ValueError as e:
         print(f"❌ 启动错误：{e}")
+        
+    finally:
+        # =======================================================
+        # 7. RAG 内存清理阶段 (任务生命周期结束) - 无论成功与否，都尝试清理
+        # =======================================================
+        if memory_tool and final_project_state_2:
+             print("\n===========================================================")
+             print(f"🧹 清理阶段：删除任务 {final_project_state_2.task_id} 相关的 RAG 记忆")
+             print("===========================================================")
+             memory_tool.delete_task_memory(final_project_state_2.task_id)
 
 
 if __name__ == "__main__":
