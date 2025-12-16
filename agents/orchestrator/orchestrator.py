@@ -1,6 +1,6 @@
 from typing import Dict, Any, Literal, TypedDict, Union
 from pydantic import BaseModel
-# [Fix] 仅导入需要的类型，避免循环引用
+# 仅导入需要的类型，避免循环引用
 from core.rotator import GeminiKeyRotator
 from core.models import ProjectState
 
@@ -10,8 +10,7 @@ class SupervisorDecision(BaseModel):
     instruction: str
     reasoning: str
 
-# [Note] AgentGraphState 在 agents.common_types 中其实没有定义完整的结构
-# 为了保持独立性，我们在 Orchestrator 内部只关心 project_state 字段
+# Local definition to avoid circular imports
 class LocalAgentGraphState(TypedDict):
     project_state: ProjectState
 
@@ -29,7 +28,6 @@ class OrchestratorAgent:
         # 兼容 LangGraph 的 State 传递
         current_state = state.get("project_state")
         if not current_state:
-             # 防御性编程：如果没有 project_state，可能是一个空 run
              print("⚠️ [Orchestrator] Warning: No project_state found in input.")
              return {}
 
@@ -74,6 +72,9 @@ class OrchestratorAgent:
                  text = parts[0].get('text', '') if parts else ''
                  history_summary.append(f"{role}: {text[:100]}...")
 
+        # [Fix] 先将历史记录拼接成字符串，避免在 f-string 中使用反斜杠
+        history_str = "\n".join(history_summary)
+
         prompt = f"""
         基于以下状态做出单步决策。
         
@@ -84,7 +85,7 @@ class OrchestratorAgent:
         {artifacts_str}
         
         当前对话历史片段 (History):
-        {"\n".join(history_summary)}
+        {history_str}
         """
 
         try:
