@@ -21,7 +21,6 @@ GLOBAL_CHECKPOINTER = MemorySaver()
 if not GEMINI_API_KEYS:
     print("⚠️ WARNING: GEMINI_API_KEYS not found in environment variables.")
     print("⚠️ System will start but Workflow execution will fail until keys are provided in .env")
-    # 提供一个占位符以允许 Server 启动，但在调用时会报错
     _rotator = None 
 else:
     _rotator = GeminiKeyRotator(GEMINI_API_KEYS)
@@ -30,11 +29,10 @@ _memory_tool = VectorMemoryTool(PINECONE_API_KEY, PINECONE_ENVIRONMENT, VECTOR_I
 _search_tool = GoogleSearchTool()
 
 # [Fix] 延迟构建 Graph，或者处理 _rotator 为 None 的情况
-# 如果 _rotator 为 None，我们仍然需要让 Server 启动以便显示错误信息给前端
 if _rotator:
     _app = build_agent_workflow(_rotator, _memory_tool, _search_tool, checkpointer=GLOBAL_CHECKPOINTER)
 else:
-    _app = None # 标记为不可用
+    _app = None 
 
 async def run_workflow(
     user_input: str,
@@ -42,7 +40,6 @@ async def run_workflow(
 ) -> AsyncGenerator[Dict[str, Any], None]:
     """
     工作流执行引擎的核心生成器。
-    (重命名为 run_workflow 以匹配 api_server 的调用)
     """
     
     # [Fix] 运行时检查 Graph 是否初始化成功
@@ -85,6 +82,21 @@ async def run_workflow(
     try:
         async for event in _app.astream(current_input, config=config):
             for node_name, node_state in event.items():
+                
+                # ================= [Fix Start] =================
+                # 增加对 node_state 类型的健壮性检查
+                # 防止出现 AttributeError: 'tuple' object has no attribute 'get'
+                if isinstance(node_state, tuple):
+                    # 如果是 tuple，通常第一个元素是 state 字典
+                    if len(node_state) > 0:
+                        node_state = node_state[0]
+                
+                # 再次检查是否为字典，如果不是则跳过本次循环
+                if not isinstance(node_state, dict):
+                    print(f"⚠️ Warning: Expected dict for node_state but got {type(node_state)}. Skipping.")
+                    continue
+                # ================= [Fix End] =================
+
                 project_state = node_state.get('project_state')
                 
                 # 构造节点完成事件
