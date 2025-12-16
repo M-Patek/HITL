@@ -19,6 +19,9 @@ class ProjectState(BaseModel):
     code_blocks: Dict[str, str] = Field(default_factory=dict, description="编码 Agent 生成的代码片段。")
     final_report: Optional[str] = Field(None, description="最终交付物。")
     
+    # [NEW] 错误追踪与回退
+    last_error: Optional[str] = Field(None, description="记录最近一次发生的系统错误信息，用于自我修复。")
+    
     # 协作与控制流
     execution_plan: List[Dict[str, str]] = Field(default_factory=list, description="调度器生成的动态执行计划（JSON）。")
     user_feedback_queue: Optional[str] = Field(None, description="用户实时介入的反馈，激活后流程中断。")
@@ -33,7 +36,7 @@ class ProjectState(BaseModel):
 
 class ExecutionStep(BaseModel):
     """定义调度器生成的单个执行步骤。"""
-    agent: str = Field(..., description="要执行的 Agent 名称 (如: researcher, analyst, coder)。")
+    agent: str = Field(..., description="要执行的 Agent 名称 (如: researcher, coding_crew)。")
     instruction: str = Field(..., description="给该 Agent 的具体指令和焦点任务。")
 
 class ExecutionPlan(BaseModel):
