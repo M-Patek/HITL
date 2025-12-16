@@ -32,6 +32,7 @@ def test_platform_workflow():
         search_tool_instance = GoogleSearchTool()
 
         # 2. 构建 Agent Workflow
+        # 注意: build_agent_workflow 现在会尝试加载 prompts/ 文件夹下的 Prompt 文件
         app = build_agent_workflow(rotator, memory_tool, search_tool_instance) 
         
         # 3. 初始化项目状态
@@ -54,16 +55,27 @@ def test_platform_workflow():
         print("\n--- 运行第一阶段：自主规划与执行 (Orchestrator -> Researcher -> Analyst) ---")
         
         final_state = None
+        # 添加变量来存储最新的有效 project_state
+        last_valid_project_state = initial_project_state
+        
         for step in app.stream(initial_graph_state):
             final_state = step
             if "__end__" in step:
                 print(f"--- 流程结束于: {list(step.keys())[0]} ---")
             else:
-                 print(f"--- 流程当前节点: {list(step.keys())[0]} ---")
+                 node_name = list(step.keys())[0]
+                 print(f"--- 流程当前节点: {node_name} ---")
+                 # 如果节点有 project_state，则更新 last_valid_project_state
+                 if 'project_state' in step[node_name]:
+                     last_valid_project_state = step[node_name]['project_state']
             
         
-        # 5. 注入用户反馈 (模拟人机介入)
-        final_project_state = final_state['project_state']
+        # 5. 安全地获取最终项目状态
+        # 无论流程如何结束，使用最后一次成功更新的状态
+        final_project_state = last_valid_project_state
+        print(f"\n--- 第一轮流程结束。使用的最终状态 ID: {final_project_state.task_id} ---")
+        
+        # 6. 注入用户反馈 (模拟人机介入)
         
         # 模拟：流程结束后，用户检查了报告并发现问题
         if final_project_state.final_report:
@@ -72,32 +84,38 @@ def test_platform_workflow():
             print("===========================================================")
             
             # 注入新的状态，带有用户反馈
-            new_graph_state = final_state.copy()
+            new_graph_state = {"project_state": final_project_state} # 从上一次的有效状态开始
             # 用户反馈要求回溯到研究阶段，补充数据
             new_graph_state['project_state'].user_feedback_queue = "研究中遗漏了中国比亚迪的欧洲扩张数据，请补充！然后重新分析报告。"
             
-            # 6. 运行流程 (第二轮：由路由发现反馈 -> Orchestrator 重规划 -> Agent 修正)
+            # 7. 运行流程 (第二轮：由路由发现反馈 -> Orchestrator 重规划 -> Agent 修正)
             
             final_state_generator_2 = app.stream(new_graph_state)
             
             final_state_2 = None
+            last_valid_project_state_2 = final_project_state # 继承第一轮的有效状态
+            
             for step in final_state_generator_2:
                 final_state_2 = step
                 if "__end__" in step:
                     print(f"--- 流程结束于: {list(step.keys())[0]} ---")
                 else:
-                    print(f"--- 流程当前节点: {list(step.keys())[0]} ---")
+                    node_name = list(step.keys())[0]
+                    print(f"--- 流程当前节点: {node_name} ---")
+                    # 如果节点有 project_state，则更新 last_valid_project_state
+                    if 'project_state' in step[node_name]:
+                        last_valid_project_state_2 = step[node_name]['project_state']
             
-            final_project_state_2 = final_state_2['project_state']
+            final_project_state_2 = last_valid_project_state_2 # 使用最后一次成功更新的状态
             
             print("\n===========================================================")
             print("🚀 第二轮流程结束 | 最终状态检查")
             print("===========================================================")
-            print(f"✅ 重规划流程完成。最终报告的长度变化: {len(final_project_state_2.final_report)} 字符。")
-            print(f"新研究摘要 (部分): {final_project_state_2.research_summary[:200]}...")
+            print(f"✅ 重规划流程完成。最终报告的长度变化: {len(final_project_state_2.final_report) if final_project_state_2.final_report else 0} 字符。")
+            print(f"新研究摘要 (部分): {final_project_state_2.research_summary[:200] if final_project_state_2.research_summary else '无摘要'}...")
             print("请检查控制台，观察 Orchestrator 如何从 Orchestrator -> Researcher -> Analyst 进行重定向。")
         else:
-            print("❌ 协作失败，无法注入用户反馈。")
+            print("❌ 协作失败，无法注入用户反馈。可能第一轮运行就失败了。")
             final_project_state_2 = final_project_state # 如果第二轮未运行，使用第一轮的状态进行清理
 
     except ValueError as e:
@@ -105,7 +123,7 @@ def test_platform_workflow():
         
     finally:
         # =======================================================
-        # 7. RAG 内存清理阶段 (任务生命周期结束) - 无论成功与否，都尝试清理
+        # 8. RAG 内存清理阶段 (任务生命周期结束) - 无论成功与否，都尝试清理
         # =======================================================
         if memory_tool and final_project_state_2:
              print("\n===========================================================")
