@@ -143,7 +143,14 @@ def build_agent_workflow(
     
     # 1. 初始化 Prompt
     orch_prompt = load_prompt_file("agents/orchestrator/prompts/orchestrator.md")
-    res_prompt = load_prompt_file("prompts/researcher_prompt.md")
+    
+    # [Modified] 不再加载外部 researcher_prompt.md，直接定义默认 Prompt
+    res_prompt = """Role: Senior Research Assistant (The "Librarian")
+    
+    你是由 Google Gemini 驱动的高级研究助手。
+    你的职责是基于提供的搜索结果，提取关键信息，并将其综合为一份结构化的事实摘要。
+    请务必使用 ResearchArtifact Schema 进行结构化输出 (JSON)。
+    """
     
     # 2. 初始化单点 Agent
     orchestrator = OrchestratorAgent(rotator, orch_prompt)
