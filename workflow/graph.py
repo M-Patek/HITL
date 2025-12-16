@@ -7,8 +7,10 @@ from core.rotator import GeminiKeyRotator
 from tools.memory import VectorMemoryTool
 from tools.search import GoogleSearchTool
 
-# Agent 定义
-from agents.agents import OrchestratorAgent, ResearcherAgent, AgentGraphState
+# Agent 定义 (Updated Imports)
+from agents.agents import ResearcherAgent, AgentGraphState
+# 新增: 从独立模块导入 Orchestrator
+from agents.orchestrator.orchestrator import OrchestratorAgent
 
 # 子图构建器 (Crew Subgraphs)
 from agents.crews.coding_crew.graph import build_coding_crew_graph
@@ -24,6 +26,8 @@ def load_prompt_file(path: str) -> str:
     if os.path.exists(path):
         with open(path, 'r', encoding='utf-8') as f: 
             return f.read().strip()
+    # 如果找不到，尝试打印警告，方便调试路径
+    print(f"⚠️ Warning: Prompt file not found at {path}")
     return ""
 
 # =======================================================
@@ -95,8 +99,9 @@ def content_output_mapper(state: AgentGraphState, output: Dict[str, Any]) -> Dic
 def route_next_step(state: AgentGraphState) -> str:
     current_state = state["project_state"]
     
-    # 优先处理用户反馈
+    # HITL 关键点: 优先处理用户反馈
     if current_state.user_feedback_queue: 
+        print("🚦 Routing to Orchestrator for Re-planning (User Feedback detected)")
         return "orchestrator"
     
     # 计划执行完毕
@@ -113,6 +118,7 @@ def route_next_step(state: AgentGraphState) -> str:
         return next_agent
     
     # 未知 Agent，回退到调度器
+    print(f"⚠️ Unknown agent '{next_agent}' in plan. Routing back to Orchestrator.")
     current_state.user_feedback_queue = f"Unknown agent in plan: {next_agent}"
     return "orchestrator"
 
@@ -124,9 +130,9 @@ def route_next_step(state: AgentGraphState) -> str:
 def build_agent_workflow(rotator: GeminiKeyRotator, memory_tool: VectorMemoryTool, search_tool: GoogleSearchTool) -> StateGraph:
     
     # 1. 初始化通用 Prompt
-    # 注意：确保 prompts 目录下存在这些文件
-    orch_prompt = load_prompt_file("prompts/orchestrator_prompt.md")
-    res_prompt = load_prompt_file("prompts/researcher_prompt.md") # 如果没有，请创建或使用默认值
+    # [重构]: 路径更新为 agents/orchestrator/prompts/...
+    orch_prompt = load_prompt_file("agents/orchestrator/prompts/orchestrator.md")
+    res_prompt = load_prompt_file("prompts/researcher_prompt.md") # Researcher 目前仍保留在旧位置
     
     # 2. 初始化单点 Agent
     orchestrator = OrchestratorAgent(rotator, orch_prompt)
@@ -179,5 +185,9 @@ def build_agent_workflow(rotator: GeminiKeyRotator, memory_tool: VectorMemoryToo
     # 所有工作节点执行完后，都闭环回到 Orchestrator 进行检查或下一步规划
     for node in ["researcher", "coding_crew", "data_crew", "content_crew"]:
         workflow.add_edge(node, "orchestrator")
-        
+    
+    # 提示：如果需要实现真正的 CLI 交互式 HITL，
+    # 可以在这里添加 checkpointer 或 interrupt_before=["orchestrator"]
+    # workflow.compile(interrupt_before=["orchestrator"])
+    
     return workflow.compile()
