@@ -34,29 +34,35 @@ main.py: 应用启动入口和测试逻辑。
 
 🚀 快速启动
 
-1. 环境准备 (使用 Conda)
+环境准备 (使用 Conda)
 
-# 创建并激活环境
+创建并激活环境
+
 conda create --name gemini-agent-env python=3.11 -y
 conda activate gemini-agent-env
 
-# 安装核心依赖
-pip install langgraph google-genai pydantic pinecone-client tiktoken
+安装核心依赖
+
+pip install langgraph google-genai pydantic pinecone-client tiktoken python-dotenv
+
+配置 Key
+
+A. 创建 .env 文件
+
+在项目根目录下创建一个名为 .env 的文件，并按以下格式填入您的 Key：
+
+# Gemini API Keys，用逗号分隔
+GEMINI_API_KEYS="key1,key2,key3" 
+
+# Pinecone (RAG) 配置
+PINECONE_API_KEY="YOUR_PINECONE_API_KEY"
+PINECONE_ENVIRONMENT="YOUR_PINECONE_ENVIRONMENT"
 
 
-2. 配置 Key
-
-编辑 config/keys.py 文件，替换以下占位符为您真实的 Key：
-
-GEMINI_API_KEYS：您的 Gemini API Key 列表。
-
-PINECONE_API_KEY, PINECONE_ENVIRONMENT：您的向量数据库配置（可选，但推荐）。
-
-3. 运行平台
+运行平台
 
 确保您在项目根目录下，运行 main.py 启动测试流程：
 
 python main.py
-
 
 项目将自动开始 调度 -> 执行 -> 重规划 的动态协作过程。
