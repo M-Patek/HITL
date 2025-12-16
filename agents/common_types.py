@@ -14,11 +14,11 @@ class BaseAgentState(TypedDict):
     user_input: str
     full_chat_history: List[Dict[str, Any]]
 
-# [Fix] 新增 BaseAgent 类定义
 class BaseAgent:
     """所有 Agent 的基类，负责持有 LLM Client"""
     def __init__(self, llm_client: Any):
         self.llm_client = llm_client
 
-# [Fix] 新增 State 类型别名
+# 类型别名定义
 State = Dict[str, Any]
+GraphDefinition = Any  # [Fix] 将 GraphDefinition 定义在这里，打破循环依赖
