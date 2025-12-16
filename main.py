@@ -1,7 +1,7 @@
 import os
 import random
 import sys # 导入 sys 模块用于退出
-from typing import List
+from typing import List, Dict, Any, Optional
 from langgraph.graph import StateGraph, END
 from dotenv import load_dotenv # 导入 load_dotenv
 
@@ -36,15 +36,48 @@ def get_user_initial_task() -> str:
         
     return initial_task.strip()
 
+def run_workflow_iteration(app: StateGraph, current_state: AgentGraphState) -> Tuple[Optional[ProjectState], bool]:
+    """
+    运行 LangGraph 流程的一个完整迭代，直到任务完成或需要重新规划。
+    返回最新的 ProjectState 和任务是否完成的布尔值。
+    """
+    last_valid_project_state = current_state['project_state']
+    
+    try:
+        # LangGraph 流式运行
+        for step in app.stream(current_state):
+            final_state = step
+            
+            if "__end__" in step:
+                print(f"--- 流程结束于: {list(step.keys())[0]} ---")
+                return last_valid_project_state, True # 任务完成
+            
+            node_name = list(step.keys())[0]
+            print(f"--- 流程当前节点: {node_name} ---")
+            
+            # 始终更新最近一次的有效状态
+            if 'project_state' in step[node_name]:
+                last_valid_project_state = step[node_name]['project_state']
+                
+                # 检查 Orchestrator 是否已经完成了当前计划的执行
+                # 如果当前节点是 Orchestrator，并且它没有启动新的 next_steps，但也没有设置 END，
+                # 或者如果有用户反馈队列，流程将在路由中中断，这里不需要特殊处理，只需确保状态更新。
+
+        # 如果循环结束但没有命中 __end__ (通常发生在强制中断或错误后)
+        return last_valid_project_state, False
+        
+    except Exception as e:
+        print(f"❌ 流程运行中发生错误: {e}")
+        return last_valid_project_state, False
+
 
 def test_platform_workflow():
     """
-    测试 LangGraph 集成后的多 Agent 协作流程，并模拟人机协作循环。
+    测试 LangGraph 集成后的多 Agent 协作流程，并实现交互式人机协作循环。
     """
     print("\n--- 正在初始化 Agent 平台 ---")
     
     memory_tool = None # 预定义，确保清理步骤可以访问
-    final_project_state_2 = None # 预定义，确保清理步骤可以访问 task_id
     
     # 检查是否有有效的 Gemini Key，如果没有，则抛出错误
     if not GEMINI_API_KEYS:
@@ -63,101 +96,84 @@ def test_platform_workflow():
         app = build_agent_workflow(rotator, memory_tool, search_tool_instance) 
         
         # 4. 初始化项目状态
-        initial_project_state = ProjectState(
+        current_project_state = ProjectState(
             task_id=f"TASK_{random.randint(1000, 9999)}",
             user_input=initial_task,
             full_chat_history=[
                 {"role": "user", "parts": [{"text": initial_task}]}
             ]
         )
-        initial_graph_state = {"project_state": initial_project_state}
         
-        print(f"✨ 平台启动 (动态调度) | 任务ID: {initial_project_state.task_id} | 任务：{initial_task[:50]}...")
+        print(f"✨ 平台启动 (动态调度) | 任务ID: {current_project_state.task_id} | 任务：{initial_task[:50]}...")
         print("===========================================================")
 
-        # 5. 运行 Agent 流程 (第一轮：自主规划与执行)
-        print("\n--- 运行第一阶段：自主规划与执行 (Orchestrator -> Agent 团队) ---")
+        is_complete = False
         
-        final_state = None
-        # 添加变量来存储最新的有效 project_state
-        last_valid_project_state = initial_project_state
-        
-        for step in app.stream(initial_graph_state):
-            final_state = step
-            if "__end__" in step:
-                print(f"--- 流程结束于: {list(step.keys())[0]} ---")
-            else:
-                 node_name = list(step.keys())[0]
-                 print(f"--- 流程当前节点: {node_name} ---")
-                 # 如果节点有 project_state，则更新 last_valid_project_state
-                 if 'project_state' in step[node_name]:
-                     last_valid_project_state = step[node_name]['project_state']
+        # 5. 交互式主循环：直到任务完成或用户手动退出
+        while not is_complete:
             
-        
-        # 6. 安全地获取最终项目状态
-        final_project_state = last_valid_project_state
-        print(f"\n--- 第一轮流程结束。使用的最终状态 ID: {final_project_state.task_id} ---")
-        
-        # 7. 注入用户反馈（提示用户）
-        print("\n===========================================================")
-        print(f"✅ 任务完成。最终报告 (部分):\n{final_project_state.final_report[:500]}...")
-        print("\n--- 人机协作 (Human-in-the-Loop) 循环 ---")
-        
-        user_feedback = input("🚨 是否需要修正或补充？请输入反馈（或直接按 Enter 结束）：\n>>> ")
-        
-        if user_feedback.strip():
-            print("===========================================================")
+            print("\n--- 启动新一轮 Agent 流程 (Orchestrator 将首先检查状态) ---")
+            
+            # 运行一个完整的迭代（直到 Orchestrator 再次被调用或任务结束）
+            current_state_dict = {"project_state": current_project_state}
+            current_project_state, is_complete = run_workflow_iteration(app, current_state_dict)
+            
+            # 如果任务已完成，跳出循环
+            if is_complete:
+                break
+
+            # 如果流程被 Orchestrator 路由回 Orchestrator (例如，规划错误或未完成)，继续循环
+            if current_project_state.execution_plan:
+                print(f"🔄 流程自动继续：还有 {len(current_project_state.execution_plan)} 步待执行。")
+                continue # 重新开始下一轮迭代
+
+            # 流程已暂停 (Orchestrator完成了当前计划，等待新的任务/反馈)
+            print("\n===========================================================")
+            print("🚀 Agent 团队已完成当前计划序列。")
+            if current_project_state.final_report:
+                 print(f"✅ 当前产出报告 (部分):\n{current_project_state.final_report[:500]}...")
+
+            print("\n--- 人机协作 (Human-in-the-Loop) 介入点 ---")
+            user_feedback = input("🚨 是否需要修正、指正设计或添加新任务？请输入反馈（或直接按 Enter/Exit 完成）：\n>>> ")
+            
+            if user_feedback.lower() in ["exit", "q", ""]:
+                is_complete = True
+                print("\n🎉 用户选择结束流程。最终结果已生成。")
+                break
+                
+            # 注入用户反馈，强制 Orchestrator 重新规划
+            current_project_state.user_feedback_queue = user_feedback
+            print("\n===========================================================")
             print("🚨 发现用户反馈！流程中断，重定向到 Orchestrator 进行重规划...")
             print("===========================================================")
-            
-            # 注入新的状态，带有用户反馈
-            new_graph_state = {"project_state": final_project_state} # 从上一次的有效状态开始
-            new_graph_state['project_state'].user_feedback_queue = user_feedback
-            
-            # 8. 运行流程 (第二轮：由路由发现反馈 -> Orchestrator 重规划 -> Agent 修正)
-            
-            final_state_generator_2 = app.stream(new_graph_state)
-            
-            final_state_2 = None
-            last_valid_project_state_2 = final_project_state # 继承第一轮的有效状态
-            
-            for step in final_state_generator_2:
-                final_state_2 = step
-                if "__end__" in step:
-                    print(f"--- 流程结束于: {list(step.keys())[0]} ---")
-                else:
-                    node_name = list(step.keys())[0]
-                    print(f"--- 流程当前节点: {node_name} ---")
-                    # 如果节点有 project_state，则更新 last_valid_project_state
-                    if 'project_state' in step[node_name]:
-                        last_valid_project_state_2 = step[node_name]['project_state']
-            
-            final_project_state_2 = last_valid_project_state_2 # 使用最后一次成功更新的状态
-            
+
+        # 6. 最终状态总结
+        final_project_state = current_project_state
+        print(f"\n--- 最终流程结束。使用的最终状态 ID: {final_project_state.task_id} ---")
+        
+        # ... 最终报告输出 ...
+        if final_project_state.final_report:
             print("\n===========================================================")
-            print("🚀 第二轮流程结束 | 最终状态检查")
+            print("📜 最终交付物")
             print("===========================================================")
-            print(f"✅ 重规划流程完成。最终报告 (更新后，部分):\n{final_project_state_2.final_report[:500]}...")
-            print("请检查控制台，观察 Orchestrator 如何重定向以响应您的反馈。")
+            print(final_project_state.final_report)
         else:
-            final_project_state_2 = final_project_state
-            print("\n===========================================================")
-            print("🎉 用户选择结束流程。最终结果已生成。")
-            print("===========================================================")
+             print("📜 最终交付物: 无最终报告产出。")
 
     except ValueError as e:
         print(f"❌ 启动错误：{e}")
         
     finally:
         # =======================================================
-        # 9. RAG 内存清理阶段 (任务生命周期结束) - 无论成功与否，都尝试清理
+        # 7. RAG 内存清理阶段 (任务生命周期结束) - 无论成功与否，都尝试清理
         # =======================================================
-        if memory_tool and final_project_state_2:
+        if memory_tool and current_project_state:
              print("\n===========================================================")
-             print(f"🧹 清理阶段：删除任务 {final_project_state_2.task_id} 相关的 RAG 记忆")
+             print(f"🧹 清理阶段：删除任务 {current_project_state.task_id} 相关的 RAG 记忆")
              print("===========================================================")
-             memory_tool.delete_task_memory(final_project_state_2.task_id)
+             memory_tool.delete_task_memory(current_project_state.task_id)
 
 
 if __name__ == "__main__":
+    from typing import Tuple # 仅在 main 中需要导入 Tuple
     test_platform_workflow()
