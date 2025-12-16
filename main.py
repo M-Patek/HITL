@@ -1,198 +1,138 @@
 import os
-import random
-import sys 
-from typing import List, Dict, Any, Optional, Tuple
+from typing import Dict, Any
 from langgraph.graph import StateGraph, END
-from dotenv import load_dotenv 
 
-# 在导入配置之前，加载环境变量
-load_dotenv()
-
-# 从所有模块导入依赖
-from config.keys import GEMINI_API_KEYS, PINECONE_API_KEY, PINECONE_ENVIRONMENT, VECTOR_INDEX_NAME
 from core.rotator import GeminiKeyRotator
 from core.models import ProjectState
 from tools.memory import VectorMemoryTool
 from tools.search import GoogleSearchTool
-from workflow.graph import build_agent_workflow, AgentGraphState
 
+from agents.agents import OrchestratorAgent, ResearcherAgent, AgentGraphState
+# 导入所有 Crew Subgraphs
+from agents.crews.coding_crew.graph import build_coding_crew_graph
+from agents.crews.data_crew.graph import build_data_crew_graph
+from agents.crews.content_crew.graph import build_content_crew_graph
 
-def get_user_initial_task() -> str:
-    """从控制台获取用户的初始任务。"""
-    print("\n===========================================================")
-    print("🤖 Gemini Agent 协作平台 - 任务输入")
-    print("===========================================================")
-    print("请输入您的初始任务（例如：研究并总结最新的AI芯片发展趋势，然后编写一个Python数据分析脚本）：")
-    initial_task = input(">>> ")
-    print("===========================================================")
+def load_prompt_file(path: str) -> str:
+    if os.path.exists(path):
+        with open(path, 'r', encoding='utf-8') as f: return f.read().strip()
+    return ""
+
+# =======================================================
+# 1. 适配器 (Mappers)
+#    负责将主图状态映射给子图，并将子图结果收回主图
+# =======================================================
+
+def common_input_mapper(state: AgentGraphState) -> Dict[str, Any]:
+    """通用的输入映射逻辑"""
+    project = state["project_state"]
+    instruction = project.execution_plan[0]['instruction'] if project.execution_plan else "No instruction"
+    return {
+        "task_id": project.task_id,
+        "user_input": project.user_input,
+        "full_chat_history": project.full_chat_history,
+        "current_instruction": instruction,
+        "iteration_count": 0,
+        "review_status": "pending",
+        # Data Crew 特有
+        "raw_data_context": project.research_summary if project.research_summary else ""
+    }
+
+def coding_output_mapper(state: AgentGraphState, output: Dict[str, Any]) -> Dict[str, Any]:
+    project = state["project_state"]
+    code = output.get("generated_code", "")
+    project.code_blocks["coding_crew"] = code
+    project.full_chat_history.append({"role": "model", "parts": [{"text": f"[Coding Crew Output]\n{code}"}]})
+    if project.execution_plan: project.execution_plan.pop(0)
+    return {"project_state": project}
+
+def data_output_mapper(state: AgentGraphState, output: Dict[str, Any]) -> Dict[str, Any]:
+    project = state["project_state"]
+    report = output.get("final_report", output.get("analysis_draft", "")) # Fallback to draft
+    project.final_report = report # 更新最终报告字段
+    project.full_chat_history.append({"role": "model", "parts": [{"text": f"[Data Crew Output]\n{report}"}]})
+    if project.execution_plan: project.execution_plan.pop(0)
+    return {"project_state": project}
+
+def content_output_mapper(state: AgentGraphState, output: Dict[str, Any]) -> Dict[str, Any]:
+    project = state["project_state"]
+    content = output.get("final_content", output.get("content_draft", ""))
+    project.final_report = content # 更新最终报告字段
+    project.full_chat_history.append({"role": "model", "parts": [{"text": f"[Content Crew Output]\n{content}"}]})
+    if project.execution_plan: project.execution_plan.pop(0)
+    return {"project_state": project}
+
+# =======================================================
+# 2. 路由逻辑
+# =======================================================
+
+def route_next_step(state: AgentGraphState) -> str:
+    current_state = state["project_state"]
+    if current_state.user_feedback_queue: return "orchestrator"
+    if not current_state.execution_plan: return "end"
+        
+    next_agent = current_state.execution_plan[0].get('agent', '').lower()
+    valid_routes = ["researcher", "coding_crew", "data_crew", "content_crew"]
     
-    if not initial_task.strip():
-        print("❌ 任务输入为空。程序退出。")
-        sys.exit(1)
-        
-    return initial_task.strip()
-
-def run_workflow_iteration(app: StateGraph, current_state: AgentGraphState) -> Tuple[Optional[ProjectState], bool]:
-    """
-    运行 LangGraph 流程的一个完整迭代。
-    """
-    last_valid_project_state = current_state['project_state']
+    if next_agent in valid_routes: return next_agent
     
-    try:
-        # LangGraph 流式运行
-        for step in app.stream(current_state):
-            final_state = step
-            
-            if "__end__" in step:
-                print(f"--- 流程结束于: {list(step.keys())[0]} ---")
-                return last_valid_project_state, True 
-            
-            node_name = list(step.keys())[0]
-            print(f"--- 流程当前节点: {node_name} ---")
-            
-            if 'project_state' in step[node_name]:
-                last_valid_project_state = step[node_name]['project_state']
-                
-        return last_valid_project_state, False
-        
-    except Exception as e:
-        # 这里捕捉的是 Graph 内部抛出的未处理异常
-        print(f"❌ 流程运行中发生未捕获异常: {e}")
-        # 将异常传递出去，或者在这里返回状态供主循环处理
-        raise e 
+    current_state.user_feedback_queue = f"Unknown agent: {next_agent}"
+    return "orchestrator"
 
+# =======================================================
+# 3. 构建主图
+# =======================================================
 
-def test_platform_workflow():
-    """
-    测试 LangGraph 集成后的多 Agent 协作流程，并实现交互式人机协作循环。
-    """
-    print("\n--- 正在初始化 Agent 平台 ---")
+def build_agent_workflow(rotator: GeminiKeyRotator, memory_tool: VectorMemoryTool, search_tool: GoogleSearchTool) -> StateGraph:
     
-    memory_tool = None 
-    current_project_state = None 
-
-    if not GEMINI_API_KEYS:
-         raise ValueError("致命错误：未在 .env 中配置 GEMINI_API_KEYS。")
-
-    try:
-        # 1. 实例化核心工具和资源
-        rotator = GeminiKeyRotator(GEMINI_API_KEYS)
-        memory_tool = VectorMemoryTool(PINECONE_API_KEY, PINECONE_ENVIRONMENT, VECTOR_INDEX_NAME)
-        search_tool_instance = GoogleSearchTool()
-
-        # 2. 获取用户任务
-        initial_task = get_user_initial_task()
+    # Init Agents
+    orchestrator = OrchestratorAgent(rotator, load_prompt_file("prompts/orchestrator_prompt.md"))
+    researcher = ResearcherAgent(rotator, memory_tool, search_tool, load_prompt_file("prompts/researcher_prompt.md"))
+    
+    # Init Subgraphs
+    coding_app = build_coding_crew_graph(rotator)
+    data_app = build_data_crew_graph(rotator)
+    content_app = build_content_crew_graph(rotator)
+    
+    workflow = StateGraph(AgentGraphState)
+    
+    workflow.add_node("orchestrator", orchestrator.run)
+    workflow.add_node("researcher", researcher.run)
+    
+    # Register Subgraph Nodes using Wrappers (Async)
+    async def call_coding(state: AgentGraphState):
+        res = await coding_app.ainvoke(common_input_mapper(state))
+        return coding_output_mapper(state, res)
         
-        # 3. 构建 Agent Workflow
-        app = build_agent_workflow(rotator, memory_tool, search_tool_instance) 
+    async def call_data(state: AgentGraphState):
+        res = await data_app.ainvoke(common_input_mapper(state))
+        return data_output_mapper(state, res)
+
+    async def call_content(state: AgentGraphState):
+        res = await content_app.ainvoke(common_input_mapper(state))
+        return content_output_mapper(state, res)
+
+    workflow.add_node("coding_crew", call_coding)
+    workflow.add_node("data_crew", call_data)
+    workflow.add_node("content_crew", call_content)
+    
+    workflow.set_entry_point("orchestrator")
+    
+    workflow.add_conditional_edges(
+        "orchestrator", 
+        route_next_step, 
+        {
+            "researcher": "researcher",
+            "coding_crew": "coding_crew",
+            "data_crew": "data_crew",
+            "content_crew": "content_crew",
+            "orchestrator": "orchestrator",
+            "end": END
+        }
+    )
+    
+    # Edges back to Orchestrator
+    for node in ["researcher", "coding_crew", "data_crew", "content_crew"]:
+        workflow.add_edge(node, "orchestrator")
         
-        # 4. 初始化项目状态
-        current_project_state = ProjectState(
-            task_id=f"TASK_{random.randint(1000, 9999)}",
-            user_input=initial_task,
-            full_chat_history=[
-                {"role": "user", "parts": [{"text": initial_task}]}
-            ]
-        )
-        
-        print(f"✨ 平台启动 (动态调度) | 任务ID: {current_project_state.task_id} | 任务：{initial_task[:50]}...")
-        print("===========================================================")
-
-        is_complete = False
-        
-        # 5. 交互式主循环
-        while not is_complete:
-            try:
-                print("\n--- 启动新一轮 Agent 流程 (Orchestrator 将首先检查状态) ---")
-                
-                # 运行迭代
-                current_state_dict = {"project_state": current_project_state}
-                new_project_state, iteration_complete = run_workflow_iteration(app, current_state_dict)
-                
-                # 更新状态
-                if new_project_state:
-                    current_project_state = new_project_state
-                
-                is_complete = iteration_complete
-                
-                # 检查是否有自动回退产生的错误
-                if current_project_state.last_error and not is_complete:
-                    print(f"\n⚠️ 警告：系统检测到内部错误: {current_project_state.last_error}")
-                    print("🔄 正在触发 Orchestrator 自我修复流程...")
-                    continue # 直接进入下一轮，让 Orchestrator 处理反馈
-
-                if is_complete:
-                    break
-
-                if current_project_state.execution_plan:
-                    print(f"🔄 流程自动继续：还有 {len(current_project_state.execution_plan)} 步待执行。")
-                    continue 
-
-                # 正常的人机协作点
-                print("\n===========================================================")
-                print("🚀 Agent 团队已完成当前计划序列。")
-                if current_project_state.final_report:
-                     print(f"✅ 当前产出报告 (部分):\n{current_project_state.final_report[:500]}...")
-
-                print("\n--- 人机协作 (Human-in-the-Loop) 介入点 ---")
-                user_feedback = input("🚨 请输入反馈（输入 'q' 退出，或输入指令）：\n>>> ")
-                
-                if user_feedback.lower() in ["exit", "q", ""]:
-                    is_complete = True
-                    break
-                    
-                current_project_state.user_feedback_queue = user_feedback
-                print("🚨 反馈已注入，重定向到 Orchestrator...")
-
-            except KeyboardInterrupt:
-                print("\n\n🛑 用户强制中断流程。")
-                choice = input("👉 您希望：(1) 退出程序 (2) 恢复并手动输入新指令？ [1/2]: ")
-                if choice == "2":
-                    manual_fix = input("请输入修正指令以恢复 Orchestrator: ")
-                    current_project_state.user_feedback_queue = f"用户手动恢复: {manual_fix}"
-                    continue
-                else:
-                    break
-            except Exception as e:
-                # [Level 2] 人工兜底机制
-                print(f"\n\n💥 严重系统错误 (Crash): {e}")
-                print("🛡️ 触发人工兜底保护机制...")
-                choice = input("👉 您希望：(1) 尝试保留当前状态并重试 (2) 放弃并退出？ [1/2]: ")
-                
-                if choice == "1":
-                    print("🚑 正在尝试恢复状态并请求 Orchestrator 介入...")
-                    # 注入系统级错误反馈，尝试让大脑接管
-                    current_project_state.user_feedback_queue = f"SYSTEM CRASH RECOVERY: Previous attempt failed with {str(e)}. Please replan."
-                    current_project_state.execution_plan = [] # 清空可能导致 crash 的旧计划
-                    continue
-                else:
-                    break
-
-        # 6. 最终状态总结
-        final_project_state = current_project_state
-        print(f"\n--- 最终流程结束。使用的最终状态 ID: {final_project_state.task_id} ---")
-        
-        if final_project_state.final_report:
-            print(final_project_state.final_report)
-
-        # 7. 人工审核 RAG 记忆清理
-        if memory_tool and final_project_state:
-             print("\n===========================================================")
-             print(f"🧹 记忆库清理审核：任务ID {final_project_state.task_id}")
-             print("===========================================================")
-             
-             confirm = input("🚨 主人喵，是否要删除该任务在 RAG 记忆库中的所有记录？(输入 'y' 确认删除) \n>>> ")
-             if confirm.lower() == 'y':
-                 memory_tool.delete_task_memory(final_project_state.task_id)
-                 print("✅ 已遵照主人指令，记忆已清除喵！")
-             else:
-                 print("🛡️ 用户选择保留：RAG 记忆未被删除。")
-
-    except ValueError as e:
-        print(f"❌ 启动错误：{e}")
-        
-    finally:
-        pass
-
-if __name__ == "__main__":
-    test_platform_workflow()
+    return workflow.compile()
