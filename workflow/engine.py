@@ -84,23 +84,25 @@ async def run_workflow(
             for node_name, node_state in event.items():
                 
                 # ================= [Fix Start] =================
-                # 策略: 尝试解包，如果解包失败或为空，则直接从 Checkpoint 获取最新状态
-                # 这样可以兜底解决 LangGraph 版本差异导致的 tuple 问题
-                
-                # 1. 尝试解包 tuple (如果是嵌套元组)
+                # 1. 专门过滤掉 LangGraph 的系统中断信号
+                if node_name == "__interrupt__":
+                    continue
+                # ===============================================
+
+                # 2. 尝试解包 tuple (防御性编程，应对嵌套元组)
                 temp_state = node_state
                 while isinstance(temp_state, tuple):
                     if len(temp_state) > 0:
                         temp_state = temp_state[0]
                     else:
-                        break # 空元组，无法继续解包
+                        break 
                 
-                # 2. 检查有效性: 是否为包含 project_state 的字典
+                # 3. 检查有效性
                 if isinstance(temp_state, dict) and 'project_state' in temp_state:
                     node_state = temp_state
                 else:
-                    # 3. 兜底: 从内存快照读取最新状态
-                    # 只要节点事件触发了，Checkpoint 里一定有最新数据
+                    # 4. 兜底: 从内存快照读取最新状态
+                    # 仅当不是 interrupt 且解析失败时才执行此操作
                     print(f"⚠️ [Engine] Node '{node_name}' output is weird ({type(node_state)}). Fetching latest state from Checkpoint...")
                     latest_snapshot = _app.get_state(config)
                     if latest_snapshot.values and 'project_state' in latest_snapshot.values:
@@ -135,7 +137,7 @@ async def run_workflow(
                          "data": project_state.final_report
                      }
 
-        # 3. 检查最终状态
+        # 3. 检查最终状态 (处理真正的中断逻辑)
         final_snapshot = _app.get_state(config)
         if final_snapshot.next:
             yield {
