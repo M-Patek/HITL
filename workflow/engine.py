@@ -84,16 +84,17 @@ async def run_workflow(
             for node_name, node_state in event.items():
                 
                 # ================= [Fix Start] =================
-                # 增加对 node_state 类型的健壮性检查
-                # 防止出现 AttributeError: 'tuple' object has no attribute 'get'
-                if isinstance(node_state, tuple):
-                    # 如果是 tuple，通常第一个元素是 state 字典
+                # 递归解包 tuple，直到找到 dict 或无法解包为止
+                # 解决部分环境下 langgraph 返回 nested tuple 的问题
+                while isinstance(node_state, tuple):
                     if len(node_state) > 0:
                         node_state = node_state[0]
+                    else:
+                        break # 空元组，停止解包
                 
-                # 再次检查是否为字典，如果不是则跳过本次循环
                 if not isinstance(node_state, dict):
-                    print(f"⚠️ Warning: Expected dict for node_state but got {type(node_state)}. Skipping.")
+                    # 如果还不是 dict，打印具体内容以便排查
+                    print(f"⚠️ Warning: Expected dict for node_state but got {type(node_state)}. Content: {node_state}. Skipping.")
                     continue
                 # ================= [Fix End] =================
 
