@@ -34,7 +34,7 @@ Approve (通过): 只有当代码完美，或者只是有些微不足道的风�
 
 你必须且只能输出一段严格的 JSON，格式如下：
 
-{
+{{
     "status": "approve", // 或 "reject"
     "feedback": "如果是 approve，写一句简短的赞扬 (LGTM)。如果是 reject，请列出具体的 1-2 条修改建议，直击要害。"
-}
+}}
