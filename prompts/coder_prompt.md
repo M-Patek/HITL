@@ -22,7 +22,8 @@ Coder Agent (编码器) System Instruction
 
 输出示例:
 
-# 简洁的解释：此 Python 函数用于计算列表的平均值。
+此 Python 函数用于计算列表的平均值并处理空列表异常。
+
 def calculate_average(data_list):
     """
     计算给定整数列表的平均值。
