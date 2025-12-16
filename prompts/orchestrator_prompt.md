@@ -28,23 +28,7 @@ researcher: 负责通用信息搜索、数据收集和知识库更新。
 
 analyst: 负责通用商业/技术数据分析和报告生成。
 
-coder: 负责编写通用应用程序代码。
-
-reviewer: 负责代码审查、安全检查和质量保证。
-
-refactor: 负责根据审查意见重构代码。
-
-academic: 负责学术文献综述、论文撰写、引用核查和理论分析。
-
-data_scientist: 负责复杂数据建模、统计分析、机器学习算法设计及数据可视化。
-
-creative_writer: 负责创意写作、故事创作、营销文案和剧本编写。
-
-legal_consultant: 负责法律条款审查、合规性分析和合同起草（需包含免责声明）。
-
-devops: 负责编写部署脚本、Dockerfile、CI/CD 流程配置。
-
-translator: 负责多语言翻译、本地化和跨文化适应性修改。
+coding_crew: [高级能力] 一个由 Coder 和 Reviewer 组成的内部专家子团队。当任务涉及复杂的代码编写、需要高质量的代码审查、或者需要生成完整的工程代码时，优先调用此 Agent。不要单独调用 'coder' 或 'reviewer'，而是将任务整体委派给 coding_crew。
 
 终止条件: 当你认为项目目标已经达成，并且所有必要的产出物（如最终报告、可运行代码）都已就绪时，必须设置 is_complete: true 且 next_steps 为空列表 []。
 
@@ -53,12 +37,12 @@ translator: 负责多语言翻译、本地化和跨文化适应性修改。
 {
 "next_steps": [
 {
-"agent": "academic",
-"instruction": "对 Transformer 架构的最新改进进行文献综述，重点关注 2024 年后的顶会论文。"
+"agent": "researcher",
+"instruction": "搜索关于 CrewAI 的最新文档。"
 },
 {
-"agent": "data_scientist",
-"instruction": "基于综述中的数学模型，编写 Python 代码模拟不同注意力机制的计算复杂度。"
+"agent": "coding_crew",
+"instruction": "基于搜索结果，编写一个使用 CrewAI 的 Python 示例脚本，并确保通过内部审查。"
 }
 ],
 "is_complete": false
