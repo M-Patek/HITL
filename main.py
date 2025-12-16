@@ -1,9 +1,9 @@
 import os
 import random
-import sys # 导入 sys 模块用于退出
+import sys 
 from typing import List, Dict, Any, Optional, Tuple
 from langgraph.graph import StateGraph, END
-from dotenv import load_dotenv # 导入 load_dotenv
+from dotenv import load_dotenv 
 
 # 在导入配置之前，加载环境变量
 load_dotenv()
@@ -16,10 +16,6 @@ from tools.memory import VectorMemoryTool
 from tools.search import GoogleSearchTool
 from workflow.graph import build_agent_workflow, AgentGraphState
 
-
-# =======================================================
-# 1. 平台启动与测试
-# =======================================================
 
 def get_user_initial_task() -> str:
     """从控制台获取用户的初始任务。"""
@@ -38,8 +34,7 @@ def get_user_initial_task() -> str:
 
 def run_workflow_iteration(app: StateGraph, current_state: AgentGraphState) -> Tuple[Optional[ProjectState], bool]:
     """
-    运行 LangGraph 流程的一个完整迭代，直到任务完成或需要重新规划。
-    返回最新的 ProjectState 和任务是否完成的布尔值。
+    运行 LangGraph 流程的一个完整迭代。
     """
     last_valid_project_state = current_state['project_state']
     
@@ -50,25 +45,21 @@ def run_workflow_iteration(app: StateGraph, current_state: AgentGraphState) -> T
             
             if "__end__" in step:
                 print(f"--- 流程结束于: {list(step.keys())[0]} ---")
-                return last_valid_project_state, True # 任务完成
+                return last_valid_project_state, True 
             
             node_name = list(step.keys())[0]
             print(f"--- 流程当前节点: {node_name} ---")
             
-            # 始终更新最近一次的有效状态
             if 'project_state' in step[node_name]:
                 last_valid_project_state = step[node_name]['project_state']
                 
-                # 检查 Orchestrator 是否已经完成了当前计划的执行
-                # 如果当前节点是 Orchestrator，并且它没有启动新的 next_steps，但也没有设置 END，
-                # 或者如果有用户反馈队列，流程将在路由中中断，这里不需要特殊处理，只需确保状态更新。
-
-        # 如果循环结束但没有命中 __end__ (通常发生在强制中断或错误后)
         return last_valid_project_state, False
         
     except Exception as e:
-        print(f"❌ 流程运行中发生错误: {e}")
-        return last_valid_project_state, False
+        # 这里捕捉的是 Graph 内部抛出的未处理异常
+        print(f"❌ 流程运行中发生未捕获异常: {e}")
+        # 将异常传递出去，或者在这里返回状态供主循环处理
+        raise e 
 
 
 def test_platform_workflow():
@@ -77,12 +68,11 @@ def test_platform_workflow():
     """
     print("\n--- 正在初始化 Agent 平台 ---")
     
-    memory_tool = None # 预定义，确保清理步骤可以访问
-    current_project_state = None # 预定义
+    memory_tool = None 
+    current_project_state = None 
 
-    # 检查是否有有效的 Gemini Key，如果没有，则抛出错误
     if not GEMINI_API_KEYS:
-         raise ValueError("致命错误：未在 .env 中配置 GEMINI_API_KEYS。请检查您的 .env 文件。")
+         raise ValueError("致命错误：未在 .env 中配置 GEMINI_API_KEYS。")
 
     try:
         # 1. 实例化核心工具和资源
@@ -110,67 +100,88 @@ def test_platform_workflow():
 
         is_complete = False
         
-        # 5. 交互式主循环：直到任务完成或用户手动退出
+        # 5. 交互式主循环
         while not is_complete:
-            
-            print("\n--- 启动新一轮 Agent 流程 (Orchestrator 将首先检查状态) ---")
-            
-            # 运行一个完整的迭代（直到 Orchestrator 再次被调用或任务结束）
-            current_state_dict = {"project_state": current_project_state}
-            current_project_state, is_complete = run_workflow_iteration(app, current_state_dict)
-            
-            # 如果任务已完成，跳出循环
-            if is_complete:
-                break
-
-            # 如果流程被 Orchestrator 路由回 Orchestrator (例如，规划错误或未完成)，继续循环
-            if current_project_state.execution_plan:
-                print(f"🔄 流程自动继续：还有 {len(current_project_state.execution_plan)} 步待执行。")
-                continue # 重新开始下一轮迭代
-
-            # 流程已暂停 (Orchestrator完成了当前计划，等待新的任务/反馈)
-            print("\n===========================================================")
-            print("🚀 Agent 团队已完成当前计划序列。")
-            if current_project_state.final_report:
-                 print(f"✅ 当前产出报告 (部分):\n{current_project_state.final_report[:500]}...")
-
-            print("\n--- 人机协作 (Human-in-the-Loop) 介入点 ---")
-            user_feedback = input("🚨 是否需要修正、指正设计或添加新任务？请输入反馈（或直接按 Enter/Exit 完成）：\n>>> ")
-            
-            if user_feedback.lower() in ["exit", "q", ""]:
-                is_complete = True
-                print("\n🎉 用户选择结束流程。最终结果已生成。")
-                break
+            try:
+                print("\n--- 启动新一轮 Agent 流程 (Orchestrator 将首先检查状态) ---")
                 
-            # 注入用户反馈，强制 Orchestrator 重新规划
-            current_project_state.user_feedback_queue = user_feedback
-            print("\n===========================================================")
-            print("🚨 发现用户反馈！流程中断，重定向到 Orchestrator 进行重规划...")
-            print("===========================================================")
+                # 运行迭代
+                current_state_dict = {"project_state": current_project_state}
+                new_project_state, iteration_complete = run_workflow_iteration(app, current_state_dict)
+                
+                # 更新状态
+                if new_project_state:
+                    current_project_state = new_project_state
+                
+                is_complete = iteration_complete
+                
+                # 检查是否有自动回退产生的错误
+                if current_project_state.last_error and not is_complete:
+                    print(f"\n⚠️ 警告：系统检测到内部错误: {current_project_state.last_error}")
+                    print("🔄 正在触发 Orchestrator 自我修复流程...")
+                    continue # 直接进入下一轮，让 Orchestrator 处理反馈
+
+                if is_complete:
+                    break
+
+                if current_project_state.execution_plan:
+                    print(f"🔄 流程自动继续：还有 {len(current_project_state.execution_plan)} 步待执行。")
+                    continue 
+
+                # 正常的人机协作点
+                print("\n===========================================================")
+                print("🚀 Agent 团队已完成当前计划序列。")
+                if current_project_state.final_report:
+                     print(f"✅ 当前产出报告 (部分):\n{current_project_state.final_report[:500]}...")
+
+                print("\n--- 人机协作 (Human-in-the-Loop) 介入点 ---")
+                user_feedback = input("🚨 请输入反馈（输入 'q' 退出，或输入指令）：\n>>> ")
+                
+                if user_feedback.lower() in ["exit", "q", ""]:
+                    is_complete = True
+                    break
+                    
+                current_project_state.user_feedback_queue = user_feedback
+                print("🚨 反馈已注入，重定向到 Orchestrator...")
+
+            except KeyboardInterrupt:
+                print("\n\n🛑 用户强制中断流程。")
+                choice = input("👉 您希望：(1) 退出程序 (2) 恢复并手动输入新指令？ [1/2]: ")
+                if choice == "2":
+                    manual_fix = input("请输入修正指令以恢复 Orchestrator: ")
+                    current_project_state.user_feedback_queue = f"用户手动恢复: {manual_fix}"
+                    continue
+                else:
+                    break
+            except Exception as e:
+                # [Level 2] 人工兜底机制
+                print(f"\n\n💥 严重系统错误 (Crash): {e}")
+                print("🛡️ 触发人工兜底保护机制...")
+                choice = input("👉 您希望：(1) 尝试保留当前状态并重试 (2) 放弃并退出？ [1/2]: ")
+                
+                if choice == "1":
+                    print("🚑 正在尝试恢复状态并请求 Orchestrator 介入...")
+                    # 注入系统级错误反馈，尝试让大脑接管
+                    current_project_state.user_feedback_queue = f"SYSTEM CRASH RECOVERY: Previous attempt failed with {str(e)}. Please replan."
+                    current_project_state.execution_plan = [] # 清空可能导致 crash 的旧计划
+                    continue
+                else:
+                    break
 
         # 6. 最终状态总结
         final_project_state = current_project_state
         print(f"\n--- 最终流程结束。使用的最终状态 ID: {final_project_state.task_id} ---")
         
-        # ... 最终报告输出 ...
         if final_project_state.final_report:
-            print("\n===========================================================")
-            print("📜 最终交付物")
-            print("===========================================================")
             print(final_project_state.final_report)
-        else:
-             print("📜 最终交付物: 无最终报告产出。")
 
-        # =======================================================
-        # 7. (新增) 人工审核 RAG 记忆清理阶段
-        # =======================================================
+        # 7. 人工审核 RAG 记忆清理
         if memory_tool and final_project_state:
              print("\n===========================================================")
              print(f"🧹 记忆库清理审核：任务ID {final_project_state.task_id}")
              print("===========================================================")
              
-             confirm = input("🚨 主人喵，是否要删除该任务在 RAG 记忆库中的所有记录？(输入 'y' 确认删除，其他键保留) \n>>> ")
-             
+             confirm = input("🚨 主人喵，是否要删除该任务在 RAG 记忆库中的所有记录？(输入 'y' 确认删除) \n>>> ")
              if confirm.lower() == 'y':
                  memory_tool.delete_task_memory(final_project_state.task_id)
                  print("✅ 已遵照主人指令，记忆已清除喵！")
@@ -181,10 +192,7 @@ def test_platform_workflow():
         print(f"❌ 启动错误：{e}")
         
     finally:
-        # 移除原有的自动清理代码，finally 块保持简洁
-        # memory_tool.delete_task_memory(...) # 已移除
         pass
-
 
 if __name__ == "__main__":
     test_platform_workflow()
