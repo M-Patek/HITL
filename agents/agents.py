@@ -29,7 +29,6 @@ class OrchestratorAgent:
         
         # 1. 构造 Prompt
         context_str = f"原始用户输入: {current_state.user_input}\n"
-        # 调度器只看摘要和状态，不需要全部历史
         context_str += f"已完成的研究摘要: {current_state.research_summary[:100]}...\n" if current_state.research_summary else "无研究摘要。\n"
         context_str += f"已完成的最终报告: {current_state.final_report[:100]}...\n" if current_state.final_report else "无最终报告。\n"
 
@@ -39,6 +38,7 @@ class OrchestratorAgent:
         else:
             planning_goal = "请根据当前项目状态，生成下一步最优的执行计划。"
         
+        # 提示词中只暴露三大 Crew 和 Researcher
         prompt = f"""
         你是一名高级项目调度员。你的任务是分析当前的项目状态，并严格以 JSON 格式输出下一步的执行计划。
         
@@ -46,14 +46,14 @@ class OrchestratorAgent:
         你的目标：{planning_goal}
         
         可用的 Agent 包括: 
-        - 'researcher' (收集数据，更新知识库)
-        - 'analyst' (分析数据，提炼洞察)
-        - 'coding_crew' (内部高级编程子团队)
+        - 'researcher': (单兵) 负责搜索外部信息，更新知识库。
+        - 'coding_crew': (战队) 负责代码编写、审查和重构。
+        - 'data_crew': (战队) 负责数据分析、建模和商业洞察提炼。
+        - 'content_crew': (战队) 负责创意写作、文案编辑和翻译。
         
         请严格根据 ExecutionPlan Pydantic 模型输出 JSON 计划。如果你认为项目已经完成，设置 is_complete=True 并且 next_steps 为空。
         """
         
-        # 2. 调用模型生成 JSON 计划
         try:
             response_text = self.rotator.call_gemini_with_rotation(
                 model_name=self.model,
@@ -64,11 +64,8 @@ class OrchestratorAgent:
             
             if response_text:
                 plan_data = ExecutionPlan.model_validate_json(response_text)
-                
-                # 存储 JSON 结构为字典列表，方便 LangGraph 使用
                 current_state.execution_plan = [step.model_dump() for step in plan_data.next_steps]
-                current_state.user_feedback_queue = None # 清空队列
-                
+                current_state.user_feedback_queue = None
                 print(f"✅ OrchestratorAgent 计划生成成功。下一步将执行 {len(plan_data.next_steps)} 步。")
             else:
                 current_state.execution_plan = []
@@ -82,13 +79,10 @@ class OrchestratorAgent:
 
 
 # =======================================================
-# 2. Researcher Agent (研究员)
+# 2. Researcher Agent (研究员 - 保持独立)
 # =======================================================
-
+# Researcher 需要调用工具，保持独立比较方便
 class ResearcherAgent:
-    """
-    模拟研究员 Agent 的行为。职责是利用工具（Google Search）收集信息。
-    """
     def __init__(self, rotator: GeminiKeyRotator, memory_tool: VectorMemoryTool, search_tool: GoogleSearchTool, system_instruction: str):
         self.rotator = rotator
         self.memory_tool = memory_tool 
@@ -98,27 +92,18 @@ class ResearcherAgent:
 
     def run(self, state: AgentGraphState) -> AgentGraphState:
         current_state = state["project_state"]
-        
         if not current_state.execution_plan: return state
-            
         current_instruction = current_state.execution_plan[0]['instruction']
         print(f"\n🔬 ResearcherAgent 开始工作... (指令: {current_instruction[:50]}...)")
         
-        # 1. 使用工具执行任务
-        # 使用当前指令作为搜索查询，确保搜索的焦点性
         search_results = self.search_tool.search(current_instruction) 
         
-        # 2. 构造 Prompt (包含搜索结果)
         prompt_with_context = f"""
-        请严格根据以下指令执行任务，并返回详细的总结内容。
         [指令]: {current_instruction}
         [外部搜索结果]: {search_results}
         请利用这些结果生成一份精炼的研究摘要。
         """
-        
-        contents = current_state.full_chat_history + [
-            {"role": "user", "parts": [{"text": prompt_with_context}]}
-        ]
+        contents = current_state.full_chat_history + [{"role": "user", "parts": [{"text": prompt_with_context}]}]
         
         research_result = self.rotator.call_gemini_with_rotation(
             model_name=self.model,
@@ -127,117 +112,49 @@ class ResearcherAgent:
         )
         
         if research_result:
-            # 存储到向量数据库 (模拟)
-            self.memory_tool.store_output(
-                task_id=current_state.task_id, 
-                content=research_result, 
-                agent_role="Researcher"
-            )
-            
+            self.memory_tool.store_output(task_id=current_state.task_id, content=research_result, agent_role="Researcher")
             current_state.research_summary = research_result 
-            print("✅ ResearcherAgent 工作完成，产出已存储到语义记忆库 (已更新摘要)。")
+            print("✅ ResearcherAgent 工作完成，产出已存储到语义记忆库。")
             current_state.full_chat_history.append({"role": "model", "parts": [{"text": research_result}]})
-        else:
-            print("❌ ResearcherAgent 失败，未更新状态。")
-
+        
         current_state.execution_plan.pop(0)
         return {"project_state": current_state}
 
 
 # =======================================================
-# 3. Analyst Agent (分析师)
+# 3. SimulatedCrewAgent (通用战队类) - [NEW & UPDATED]
 # =======================================================
 
-class AnalystAgent:
+class SimulatedCrewAgent:
     """
-    模拟分析师 Agent 的行为。职责是读取研究数据，并进行提炼和分析。
+    通用 Crew 代理类，用于实例化不同的战队 (Coding, Data, Content)。
+    它利用专门的 Multi-Persona Prompt 来模拟团队协作。
     """
-    def __init__(self, rotator: GeminiKeyRotator, system_instruction: str):
+    def __init__(self, rotator: GeminiKeyRotator, system_instruction: str, crew_name: str, output_target: str = "report"):
         self.rotator = rotator
         self.system_instruction = system_instruction
         self.model = "gemini-2.5-flash"
+        self.crew_name = crew_name
+        self.output_target = output_target # 'report' or 'code'
 
     def run(self, state: AgentGraphState) -> AgentGraphState:
         current_state = state["project_state"]
-        
         if not current_state.execution_plan: return state
             
         current_instruction = current_state.execution_plan[0]['instruction']
-        print(f"\n🧠 AnalystAgent 开始工作... (指令: {current_instruction[:50]}...)")
-        
-        # 1. 构造 Prompt (使用所有上下文)
-        # 生产环境中：这里应该调用 memory_tool.retrieve_context() 获取知识
-        
-        contents = current_state.full_chat_history + [
-            {"role": "user", "parts": [
-                {"text": f"请严格根据指令和历史研究摘要，撰写一份专业的分析报告：{current_instruction}"}
-            ]}
-        ]
-        
-        analysis_result = self.rotator.call_gemini_with_rotation(
-            model_name=self.model,
-            contents=contents,
-            system_instruction=self.system_instruction
-        )
-        
-        if analysis_result:
-            current_state.final_report = analysis_result
-            print("✅ AnalystAgent 工作完成，已更新 final_report。")
-            current_state.full_chat_history.append({"role": "model", "parts": [{"text": analysis_result}]})
-        else:
-            print("❌ AnalystAgent 失败，未更新状态。")
+        print(f"\n⚔️ {self.crew_name} 启动... (任务: {current_instruction[:50]}...)")
+        print(f"👥 正在召集内部成员进行协作...")
 
-        current_state.execution_plan.pop(0)
-        return {"project_state": current_state}
-
-
-# =======================================================
-# 4. CodingCrewAgent (子团队封装) - [UPDATED]
-# =======================================================
-
-class CodingCrewAgent:
-    """
-    [分层架构节点]
-    这是一个特殊的 Agent，它内部封装了一个 CrewAI 或 AutoGen 的子团队。
-    它作为一个单一节点嵌入 LangGraph，负责处理复杂的编程、重构和审查闭环任务。
-    
-    [UPDATED] 现在支持读取外部 system_instruction，并调用 Gemini 模拟 Crew 行为。
-    """
-    def __init__(self, rotator: GeminiKeyRotator, system_instruction: str):
-        self.rotator = rotator
-        self.system_instruction = system_instruction
-        self.model = "gemini-2.5-flash"
-        # 在这里，实际项目中你可以初始化 CrewAI 的 Agents
-        # self.crew = Crew(...) 
-
-    def run(self, state: AgentGraphState) -> AgentGraphState:
-        current_state = state["project_state"]
-        
-        if not current_state.execution_plan: return state
-            
-        # 获取指令，这通常是一个复杂的编程任务
-        current_instruction = current_state.execution_plan[0]['instruction']
-        print(f"\n🛠️ CodingCrewAgent (子团队) 启动... (任务: {current_instruction[:50]}...)")
-        print("👥 正在召集内部 Crew (Coder & Reviewer)...")
-
-        # =======================================================
-        # CrewAI / AutoGen 模拟执行逻辑
-        # =======================================================
-        # 使用 Gemini 配合专门的 Prompt 来模拟整个团队的协作输出
-        
+        # 注入上下文
         prompt_with_context = f"""
         [任务指令]: {current_instruction}
         
-        请作为 Coding Crew 开始工作。
-        请参考之前的研究摘要（如果有）：
-        {current_state.research_summary[:500] if current_state.research_summary else "无"}
+        请作为 {self.crew_name} 开始内部协作。
+        参考资料(研究摘要): {current_state.research_summary[:800] if current_state.research_summary else "无"}
         """
         
-        contents = current_state.full_chat_history + [
-            {"role": "user", "parts": [{"text": prompt_with_context}]}
-        ]
+        contents = current_state.full_chat_history + [{"role": "user", "parts": [{"text": prompt_with_context}]}]
         
-        # 调用 Gemini 生成模拟的 Crew 输出
         crew_result = self.rotator.call_gemini_with_rotation(
             model_name=self.model,
             contents=contents,
@@ -245,15 +162,16 @@ class CodingCrewAgent:
         )
         
         if crew_result:
-             # 将结果存入 Shared State
-            current_state.code_blocks["crew_output"] = crew_result
-            
-            # 更新历史记录
-            current_state.full_chat_history.append({"role": "model", "parts": [{"text": crew_result}]})
-            print("✅ CodingCrewAgent 子团队任务完成！结果已合并。")
-        else:
-            print("❌ CodingCrewAgent 执行失败。")
+            # 根据战队类型更新不同的状态字段
+            if self.output_target == "code":
+                current_state.code_blocks[self.crew_name] = crew_result
+            else:
+                current_state.final_report = crew_result # 数据和内容战队通常更新报告
 
-        # 移除已完成的计划步骤
+            current_state.full_chat_history.append({"role": "model", "parts": [{"text": crew_result}]})
+            print(f"✅ {self.crew_name} 任务完成！结果已合并。")
+        else:
+            print(f"❌ {self.crew_name} 执行失败。")
+
         current_state.execution_plan.pop(0)
         return {"project_state": current_state}
