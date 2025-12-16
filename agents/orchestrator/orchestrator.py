@@ -1,6 +1,6 @@
 import os
 from typing import Dict, Any, List, Optional
-# [Fix] 移除了导致报错的 LLMClient/LLMApiClient 导入
+# 确保从 common_types 导入 BaseAgent 和 State
 from agents.common_types import BaseAgent, State
 from workflow.graph import GraphDefinition
 
@@ -12,7 +12,6 @@ class OrchestratorAgent(BaseAgent):
     suited to handle the task.
     """
 
-    # [Fix] 将 llm_client 的类型提示改为 Any，避免 Import Error
     def __init__(self, llm_client: Any, all_crews: Dict[str, GraphDefinition]):
         super().__init__(llm_client)
         self.all_crews = all_crews
@@ -40,10 +39,10 @@ class OrchestratorAgent(BaseAgent):
             [f"- {crew_name}: {crew.description}" for crew_name, crew in self.all_crews.items()]
         ) + "\n"
         
-        # [Fix] 确保路径分隔符不会引起问题
+        # 确保路径分隔符不会引起问题
         safe_prompt_dir = prompt_dir.replace('\\', '/')
 
-        # [Fix] 使用传统字符串拼接和 format() 来避免 f-string 解析问题 (SyntaxError)
+        # 使用传统字符串拼接和 format() 来避免 f-string 解析问题
         final_prompt_template = """
 {base_prompt}
 
@@ -64,11 +63,15 @@ The full directory for the crew prompts is at: {safe_prompt_dir}
         self.prompt = final_prompt.strip()
         return self.prompt
 
-
-    def run(self, state: State, user_input: str) -> Dict[str, Any]:
+    # [Fix] 修改 run 方法签名，只接收 state，并从中提取 user_input
+    def run(self, state: State) -> Dict[str, Any]:
         """
         Processes the user's request and determines the next step.
         """
+        # 从 state 中获取 project_state 对象
+        project_state = state.get("project_state")
+        # 从 project_state 中提取 user_input
+        user_input = project_state.user_input if project_state else ""
         
         # 1. Prepare message history
         messages = [
@@ -104,6 +107,7 @@ The full directory for the crew prompts is at: {safe_prompt_dir}
         }
         
         # 3. Call the LLM with the tool
+        # 注意：这里我们使用 self.llm_client，它已经在基类中被设置
         response = self.llm_client.generate_with_tool_use(
             messages=messages,
             tools=[tool_schema]
