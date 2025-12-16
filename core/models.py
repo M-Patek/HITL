@@ -1,6 +1,5 @@
-import json
 from typing import List, Optional, Dict, Any
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field
 
 # =======================================================
 # 1. 共享内存结构：项目状态 (ProjectState)
@@ -11,23 +10,26 @@ class ProjectState(BaseModel):
     定义多 Agent 协作中的共享内存/项目状态。
     所有 Agent 的输入和输出都将通过这个结构进行。
     """
-    task_id: str = Field(..., description="当前任务的唯一 ID。")
-    user_input: str = Field(..., description="用户的原始任务描述。")
+    # 基础信息
+    task_id: str = Field(..., description="当前任务的唯一 ID")
+    user_input: str = Field(..., description="用户的原始任务描述")
     
-    # 核心产出数据
-    research_summary: Optional[str] = Field(None, description="研究员 Agent 的最终结论摘要。")
-    code_blocks: Dict[str, str] = Field(default_factory=dict, description="编码 Agent 生成的代码片段。")
-    final_report: Optional[str] = Field(None, description="最终交付物。")
+    # 产出数据 (Artifacts)
+    research_summary: Optional[str] = Field(None, description="Researcher 的研究摘要")
     
-    # [NEW] 错误追踪与回退
-    last_error: Optional[str] = Field(None, description="记录最近一次发生的系统错误信息，用于自我修复。")
+    # [Updated] Coding Crew 产出
+    code_blocks: Dict[str, str] = Field(default_factory=dict, description="Coding Crew 生成的代码 (Key=模块名)")
     
-    # 协作与控制流
-    execution_plan: List[Dict[str, str]] = Field(default_factory=list, description="调度器生成的动态执行计划（JSON）。")
-    user_feedback_queue: Optional[str] = Field(None, description="用户实时介入的反馈，激活后流程中断。")
+    # [Updated] Data & Content Crew 产出 (统一作为最终报告)
+    final_report: Optional[str] = Field(None, description="最终交付物 (报告、文章或数据分析)")
     
-    # 历史记录 (维持记忆连续性)
-    full_chat_history: List[Dict[str, Any]] = Field(default_factory=list, description="所有 Agent 调用的完整输入/输出历史。")
+    # 错误追踪与自愈
+    last_error: Optional[str] = Field(None, description="最近一次发生的系统错误")
+    user_feedback_queue: Optional[str] = Field(None, description="用户实时反馈，若存在则触发中断")
+    
+    # 流程控制
+    execution_plan: List[Dict[str, str]] = Field(default_factory=list, description="Orchestrator 生成的执行计划")
+    full_chat_history: List[Dict[str, Any]] = Field(default_factory=list, description="完整对话历史")
 
 
 # =======================================================
@@ -35,11 +37,11 @@ class ProjectState(BaseModel):
 # =======================================================
 
 class ExecutionStep(BaseModel):
-    """定义调度器生成的单个执行步骤。"""
-    agent: str = Field(..., description="要执行的 Agent 名称 (如: researcher, coding_crew)。")
-    instruction: str = Field(..., description="给该 Agent 的具体指令和焦点任务。")
+    """定义单步执行动作"""
+    agent: str = Field(..., description="目标 Agent (researcher, coding_crew, etc.)")
+    instruction: str = Field(..., description="具体指令")
 
 class ExecutionPlan(BaseModel):
-    """定义调度器生成的完整的执行计划。"""
-    next_steps: List[ExecutionStep] = Field(..., description="按顺序执行的下一步任务列表。")
-    is_complete: bool = Field(..., description="如果项目已完成，则设置为 True。")
+    """Orchestrator 的结构化输出"""
+    next_steps: List[ExecutionStep] = Field(..., description="下一步任务列表")
+    is_complete: bool = Field(False, description="项目是否已完成")
