@@ -4,16 +4,14 @@ import os
 from dotenv import load_dotenv
 
 # [Fix] 1. 在导入其他模块之前，优先加载环境变量
-# 这样能确保 config.keys 导入时能读取到 .env 中的值
 load_dotenv()
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request  # <--- [Updated] 引入 Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from sse_starlette.sse import EventSourceResponse
 
 # 导入核心业务逻辑
-# 注意：workflow.engine 内部会初始化 GeminiKeyRotator，所以必须在 load_dotenv 之后导入
 from core.api_models import TaskRequest
 from workflow.engine import run_workflow
 
@@ -32,20 +30,22 @@ app.add_middleware(
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 @app.post("/stream_task")
-async def stream_task(request: TaskRequest):
+async def stream_task(body: TaskRequest, request: Request): # <--- [Updated] 注入原始 Request 对象，并将数据模型重命名为 body
     """
     SSE 流式接口: 接收用户任务，实时推送 Agent 执行过程。
     """
     
     async def event_generator():
+        # 使用 body 获取用户输入
         workflow_stream = run_workflow(
-            user_input=request.user_input, 
-            thread_id=request.thread_id
+            user_input=body.user_input, 
+            thread_id=body.thread_id
         )
 
         try:
             async for event_type, data in workflow_stream:
-                if await app.router.is_disconnected(request):
+                # [Updated] 使用原始 request 对象检查连接状态
+                if await request.is_disconnected():
                     print("⚠️ Client disconnected, stopping workflow.")
                     break
                 
@@ -56,6 +56,9 @@ async def stream_task(request: TaskRequest):
                 await asyncio.sleep(0.01)
 
         except Exception as e:
+            # 打印错误堆栈以便调试
+            import traceback
+            traceback.print_exc()
             yield {
                 "event": "error",
                 "data": json.dumps({"error": str(e)}, ensure_ascii=False)
