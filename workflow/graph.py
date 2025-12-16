@@ -3,6 +3,7 @@ from typing import Dict, Any, Optional
 from langgraph.graph import StateGraph, END
 
 # 核心依赖
+# [Note] 这里的 Rotator 实际上充当了 LLM Client
 from core.rotator import GeminiKeyRotator
 from tools.memory import VectorMemoryTool
 from tools.search import GoogleSearchTool
