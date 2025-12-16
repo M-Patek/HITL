@@ -1,8 +1,7 @@
 import os
 from typing import Dict, Any, List, Optional
-# 确保从 common_types 导入 BaseAgent 和 State
-from agents.common_types import BaseAgent, State
-from workflow.graph import GraphDefinition
+# [Fix] 从 common_types 导入 GraphDefinition，避免循环导入 workflow.graph
+from agents.common_types import BaseAgent, State, GraphDefinition
 
 
 class OrchestratorAgent(BaseAgent):
@@ -63,7 +62,6 @@ The full directory for the crew prompts is at: {safe_prompt_dir}
         self.prompt = final_prompt.strip()
         return self.prompt
 
-    # [Fix] 修改 run 方法签名，只接收 state，并从中提取 user_input
     def run(self, state: State) -> Dict[str, Any]:
         """
         Processes the user's request and determines the next step.
@@ -107,7 +105,6 @@ The full directory for the crew prompts is at: {safe_prompt_dir}
         }
         
         # 3. Call the LLM with the tool
-        # 注意：这里我们使用 self.llm_client，它已经在基类中被设置
         response = self.llm_client.generate_with_tool_use(
             messages=messages,
             tools=[tool_schema]
