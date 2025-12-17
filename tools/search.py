@@ -1,46 +1,48 @@
-import random
+import httpx
+import asyncio
 from typing import Optional
 
 # =======================================================
-# GoogleSearchTool
+# GoogleSearchTool (Async & Improved)
 # =======================================================
 
 class GoogleSearchTool:
     """
     外部搜索工具封装。
     包含自动降级策略 (Fallback Strategy)。
+    [Update] 改为异步实现，防止阻塞 Agent 工作流。
     """
     
-    def search(self, query: str) -> str:
+    async def search(self, query: str) -> str:
         """
-        执行搜索并返回摘要。
-        具备容错机制：如果主 API 失败，自动降级到 Mock 数据。
+        执行搜索并返回摘要 (Async)。
         """
         print(f"🌐 [Search Tool] Searching for: {query[:40]}...")
         
         try:
-            # 1. 尝试调用真实 API (Primary)
-            # 在此处集成真实的 Google Search API 客户端
-            # response = google_client.search(query)
-            # return response
-            
-            # [模拟]：此处模拟真实 API 未配置或超时的情况
-            raise TimeoutError("Google Search API timed out (Simulated)")
+            # 模拟真实的异步 HTTP 请求
+            # 在实际生产中，这里应替换为 SerpApi 或 Google Custom Search 的 API URL
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                # 示例：假装调用一个 API (此处仅为占位，实际会触发异常进入 fallback)
+                # response = await client.get(f"https://api.example.com/search?q={query}")
+                # response.raise_for_status()
+                # return response.json()['snippet']
+                
+                # 模拟网络延迟
+                await asyncio.sleep(0.5) 
+                raise TimeoutError("Search API not configured (Simulated)")
 
         except Exception as e:
-            # 2. 捕获异常并执行降级 (Fallback)
             print(f"⚠️ [Search Tool] Primary API failed: {e}. Switching to Fallback Mode.")
             return self._fallback_search(query)
 
     def _fallback_search(self, query: str) -> str:
         """
         备用搜索逻辑 (Mock Data)。
-        返回的数据会标记 source='fallback'。
         """
         q_lower = query.lower()
         prefix = "[Source: Fallback] "
         
-        # 模拟逻辑：根据关键词返回不同假数据
         if "python" in q_lower or "code" in q_lower:
              return prefix + "Result: Python 3.12 was released with significant performance improvements. asyncio has new features."
         elif "data" in q_lower or "trend" in q_lower:
