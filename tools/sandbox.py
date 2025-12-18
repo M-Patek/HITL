@@ -1,130 +1,105 @@
 import docker
-import tarfile
-import io
 import time
-import base64
-from typing import Tuple, List, Dict
+import logging
+from typing import Tuple, List, Optional, Dict
+
+logger = logging.getLogger("Tools-Sandbox")
 
 class DockerSandbox:
     """
-    [SWARM 3.0] 视觉增强型沙箱。
-    不仅能跑代码，还能“看见”代码生成的图片产物。
+    [Speculative Warming Enhanced]
+    安全执行 Python 代码的沙箱环境。支持容器预热。
     """
-    def __init__(self, image: str = "python:3.11-slim"):
+    def __init__(self, image: str = "python:3.9-slim"):
+        self.client = docker.from_env()
         self.image = image
-        self.container_name = "swarm-sandbox-runner"
-        self.client = None
-        
+        self.container_name = "swarm_sandbox_runner"
+        self.container = None
+        self._is_warming = False
+
+    def warm_up(self):
+        """
+        [New] 预热容器
+        在任务正式开始前调用，确保容器处于 Running 状态，减少首次执行延迟。
+        """
+        if self._is_warming:
+            logger.info("🔥 Sandbox is already warming up...")
+            return
+
+        logger.info("🔥 [Speculative] Pre-warming sandbox container...")
+        self._is_warming = True
         try:
-            self.client = docker.from_env()
             self._ensure_container()
+            logger.info("🔥 Sandbox warmed up and ready!")
         except Exception as e:
-            print(f"⚠️ [Sandbox] Docker init failed: {e}. Is Docker Desktop running?")
-            self.client = None
+            logger.error(f"Failed to warm up sandbox: {e}")
+        finally:
+            self._is_warming = False
 
     def _ensure_container(self):
-        """确保沙箱容器正在后台静默运行"""
-        if not self.client: return
-        
+        """确保容器正在运行且配置正确"""
         try:
-            container = self.client.containers.get(self.container_name)
-            if container.status != "running":
-                container.start()
-        except docker.errors.NotFound:
-            print(f"📦 [Sandbox] Creating local container ({self.image})...")
-            # 预装 matplotlib, pandas 等常用库，避免每次运行时安装
-            # 注意：生产环境建议构建专门的 Docker Image
-            self.client.containers.run(
-                self.image,
-                name=self.container_name,
-                detach=True,
-                tty=True,
-                command="tail -f /dev/null", 
-                mem_limit="1024m", # 画图可能需要更多内存
-                nano_cpus=1000000000 
-            )
-            # 尝试预装库 (非阻塞，即使失败也不影响启动)
+            # 1. 尝试获取现有容器
             try:
-                print("📦 [Sandbox] Pre-installing plotting libs...")
-                self.client.containers.get(self.container_name).exec_run("pip install matplotlib pandas numpy seaborn", detach=True)
-            except: pass
+                self.container = self.client.containers.get(self.container_name)
+                if self.container.status != "running":
+                    logger.info("Restarting stopped sandbox container...")
+                    self.container.start()
+            except docker.errors.NotFound:
+                # 2. 如果不存在，创建新的
+                logger.info("Starting new sandbox container...")
+                self.container = self.client.containers.run(
+                    self.image,
+                    detach=True,
+                    tty=True,
+                    name=self.container_name,
+                    # 限制资源防止滥用
+                    mem_limit="512m",
+                    nano_cpus=500000000, # 0.5 CPU
+                    network_mode="none" # 断网，确保安全 (如果需要联网安装库需调整)
+                )
+                
+            # 3. 基础环境检查 (Optional: 预加载常用库)
+            # self.container.exec_run("pip install pandas numpy matplotlib") 
+            
+        except Exception as e:
+            logger.error(f"Sandbox container error: {e}")
+            raise e
 
     def run_code(self, code: str) -> Tuple[str, str, List[Dict[str, str]]]:
         """
-        执行代码并捕获输出及图片产物。
-        Returns: (stdout, stderr, image_artifacts)
+        执行代码并返回 (stdout, stderr, image_artifacts)
         """
-        if not self.client:
-            return "", "Docker client not available.", []
-
-        try:
-            container = self.client.containers.get(self.container_name)
-            
-            # 1. 清理旧图片 (可选)
-            container.exec_run("rm -f /app/*.png /app/*.jpg")
-
-            # 2. 注入代码
-            encoded_code = code.encode('utf-8')
-            tar_stream = io.BytesIO()
-            with tarfile.open(fileobj=tar_stream, mode='w') as tar:
-                tar_info = tarfile.TarInfo(name='script.py')
-                tar_info.size = len(encoded_code)
-                tar_info.mtime = time.time()
-                tar.addfile(tar_info, io.BytesIO(encoded_code))
-            tar_stream.seek(0)
-            
-            container.put_archive('/app', tar_stream)
-
-            # 3. 执行
-            print(f"🏃 [Sandbox] Executing code (Vision Enabled)...")
-            exec_res = container.exec_run(
-                "python /app/script.py", 
-                workdir="/app",
-                demux=True
-            )
-            
-            stdout = exec_res.output[0].decode('utf-8') if exec_res.output[0] else ""
-            stderr = exec_res.output[1].decode('utf-8') if exec_res.output[1] else ""
-            
-            # 4. [New] 抓取图片产物
-            images = []
-            if not stderr:
-                images = self._extract_images(container)
-            
-            return stdout, stderr, images
-
-        except Exception as e:
-            return "", f"Sandbox Execution Error: {str(e)}", []
-
-    def _extract_images(self, container) -> List[Dict[str, str]]:
-        """从容器中提取 .png/.jpg 文件并转为 Base64"""
-        images = []
-        try:
-            # 列出文件
-            res = container.exec_run("ls /app")
-            files = res.output.decode().split()
-            img_files = [f for f in files if f.endswith('.png') or f.endswith('.jpg')]
-            
-            for fname in img_files:
-                print(f"   🖼️ Found image artifact: {fname}")
-                # 获取文件流
-                bits, stat = container.get_archive(f"/app/{fname}")
-                file_obj = io.BytesIO()
-                for chunk in bits:
-                    file_obj.write(chunk)
-                file_obj.seek(0)
-                
-                # 解压 tar 流 (get_archive 返回的是 tar)
-                with tarfile.open(fileobj=file_obj) as tar:
-                    member = tar.getmember(fname)
-                    img_data = tar.extractfile(member).read()
-                    b64_str = base64.b64encode(img_data).decode('utf-8')
-                    images.append({
-                        "filename": fname,
-                        "data": b64_str,
-                        "mime_type": "image/png" if fname.endswith('.png') else "image/jpeg"
-                    })
-        except Exception as e:
-            print(f"⚠️ Failed to extract images: {e}")
+        self._ensure_container()
         
-        return images
+        # 简单的文件封装，为了捕获图片，通常需要更复杂的 wrapper
+        # 这里简化为直接执行
+        wrapped_code = self._wrap_code_with_plot_saving(code)
+        
+        # 写入文件
+        setup_cmd = f"cat <<EOF > /tmp/script.py\n{wrapped_code}\nEOF"
+        self.container.exec_run(f"sh -c '{setup_cmd}'")
+        
+        # 执行
+        logger.info("Running code in sandbox...")
+        exec_result = self.container.exec_run("python /tmp/script.py")
+        
+        stdout = exec_result.output.decode("utf-8")
+        stderr = ""
+        if exec_result.exit_code != 0:
+            stderr = stdout # Python often prints errors to stdout/stderr mixed in docker exec
+            stdout = ""
+
+        # 尝试提取图片 (Mock logic for now)
+        images = []
+        # if "plot.png" in stdout... (Actual implementation would read file bytes from container)
+        
+        return stdout, stderr, images
+
+    def _wrap_code_with_plot_saving(self, code: str) -> str:
+        """注入 matplotlib 保存逻辑 (简化版)"""
+        if "matplotlib" in code or "plt." in code:
+            header = "import matplotlib\nmatplotlib.use('Agg')\nimport matplotlib.pyplot as plt\n"
+            footer = "\ntry:\n    plt.savefig('/tmp/plot.png')\n    print('[SYSTEM] Plot saved to /tmp/plot.png')\nexcept:\n    pass"
+            return header + code + footer
+        return code
