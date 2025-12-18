@@ -1,24 +1,21 @@
-from typing import TypedDict, List, Dict, Any
+import os
 
-# =======================================================
-# 通用状态定义 (Base Types)
-# =======================================================
+# --- Gateway & API Configuration ---
+GATEWAY_API_BASE = os.getenv("GATEWAY_API_BASE", "https://generativelanguage.googleapis.com/v1beta/openai/")
+GATEWAY_SECRET = os.getenv("GATEWAY_SECRET", "") # Google AI Studio Key
 
-class BaseAgentState(TypedDict):
-    """
-    基础 Agent 状态接口。
-    所有子图的状态定义 (CrewState) 都应该包含这些基础字段，
-    以便于在主图和子图之间传递上下文。
-    """
-    task_id: str
-    user_input: str
-    full_chat_history: List[Dict[str, Any]]
+# --- Vector DB ---
+PINECONE_API_KEY = os.getenv("PINECONE_API_KEY", "")
+PINECONE_ENVIRONMENT = os.getenv("PINECONE_ENVIRONMENT", "us-east-1")
+VECTOR_INDEX_NAME = os.getenv("VECTOR_INDEX_NAME", "swarm-memory")
 
-class BaseAgent:
-    """所有 Agent 的基类，负责持有 LLM Client"""
-    def __init__(self, llm_client: Any):
-        self.llm_client = llm_client
+# --- Model Tiers [Protocol Phase 1] ---
+# TIER 1: 高速、低成本。适用于分类、简单总结、搜索查询生成。
+TIER_1_FAST = "gemini-2.5-flash-preview-09-2025"
 
-# 类型别名定义
-State = Dict[str, Any]
-GraphDefinition = Any  # [Fix] 将 GraphDefinition 定义在这里，打破循环依赖
+# TIER 2: 强推理、高上下文。适用于复杂代码生成、深度分析、Orchestrator 决策。
+# (In production, change this to 'gemini-1.5-pro' or 'gemini-ultra')
+TIER_2_PRO = "gemini-2.5-flash-preview-09-2025" 
+
+# Default fallback
+GEMINI_MODEL_NAME = TIER_2_PRO
