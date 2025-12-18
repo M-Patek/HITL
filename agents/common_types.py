@@ -1,24 +1,34 @@
-from typing import TypedDict, List, Dict, Any
+from typing import TypedDict, List, Dict, Any, Optional
+from pydantic import BaseModel, Field
 
-# =======================================================
-# 通用状态定义 (Base Types)
-# =======================================================
+# --- Base States ---
 
 class BaseAgentState(TypedDict):
-    """
-    基础 Agent 状态接口。
-    所有子图的状态定义 (CrewState) 都应该包含这些基础字段，
-    以便于在主图和子图之间传递上下文。
-    """
+    """基础 Agent 状态字典"""
     task_id: str
     user_input: str
+    current_instruction: str
+    # History
     full_chat_history: List[Dict[str, Any]]
+    # Feedback
+    review_status: str
+    review_feedback: str
+    # Artifacts
+    generated_code: str
+    image_artifacts: List[Dict[str, str]]
+    final_output: str
 
-class BaseAgent:
-    """所有 Agent 的基类，负责持有 LLM Client"""
-    def __init__(self, llm_client: Any):
-        self.llm_client = llm_client
+# --- Protocol Phase 3: Efficiency Protocols ---
 
-# 类型别名定义
-State = Dict[str, Any]
-GraphDefinition = Any  # [Fix] 将 GraphDefinition 定义在这里，打破循环依赖
+class ContextConstraint(BaseModel):
+    """
+    [Protocol Phase 3] 动态上下文剪枝协议
+    定义了节点在执行时对 Token 消耗的约束条件。
+    """
+    max_history_steps: int = Field(default=10, description="保留最近多少轮详细对话")
+    max_token_budget: int = Field(default=8000, description="该节点的 Context Window 最大 Token 限制")
+    
+    pruning_strategy: str = Field(
+        default="summary_only", 
+        description="剪枝策略: 'fifo' (先进先出) | 'summary_only' (只保留摘要) | 'smart_selection' (RAG 筛选)"
+    )
