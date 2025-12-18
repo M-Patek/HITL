@@ -1,6 +1,8 @@
 import json
 import asyncio
 import os
+import uuid
+import logging
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -10,10 +12,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from sse_starlette.sse import EventSourceResponse
 
-# 导入核心业务逻辑
+# [New] 引入日志基建
+from core.logger_setup import setup_logging, trace_id_ctx
 from core.api_models import TaskRequest, FeedbackRequest
-from workflow.engine import run_workflow, GLOBAL_CHECKPOINTER
-from workflow.graph import build_agent_workflow # 若需要手动更新状态，可能需要用到 graph 实例，但这里通过 checkpointer 即可
+from workflow.engine import run_workflow, GLOBAL_CHECKPOINTER, _rotator, _memory_tool
+
+# 1. 初始化 Brain 日志
+setup_logging("SWARM-Brain")
+logger = logging.getLogger("API")
 
 app = FastAPI(title="Gemini Agent System API")
 
@@ -27,11 +33,54 @@ app.add_middleware(
 
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
+# [New] 全链路追踪中间件 (Genesis)
+@app.middleware("http")
+async def trace_id_middleware(request: Request, call_next):
+    # 生成唯一 ID (这是全链路的起源)
+    req_id = str(uuid.uuid4())
+    
+    # [关键] 放入上下文，之后的 Rotator 代码都能自动获取
+    token = trace_id_ctx.set(req_id)
+    
+    try:
+        logger.info("request_started", extra={"extra_data": {
+            "path": request.url.path,
+            "method": request.method,
+            "client_ip": request.client.host
+        }})
+        
+        response = await call_next(request)
+        
+        # 返回 ID 给前端 Debug
+        response.headers["X-Trace-ID"] = req_id
+        return response
+    finally:
+        trace_id_ctx.reset(token)
+
+# [New] Brain 系统自检接口
+@app.get("/system/status")
+async def get_system_status():
+    """
+    [接口功能]: 汇报 Brain 自身状态，并展示与 Gateway 和 Pinecone 的连接情况。
+    """
+    # 1. 检查 Gateway 链路 (调用 Rotator 新增的方法)
+    gateway_status = _rotator.check_gateway_health()
+    
+    # 2. 检查 记忆库 (Pinecone) 状态
+    memory_status = "active" if _memory_tool.is_active else "mock_mode"
+    
+    return {
+        "service": "SWARM-Brain",
+        "role": "Orchestrator",
+        "health": "ok",
+        "dependencies": {
+            "gateway": gateway_status,
+            "memory_storage": memory_status
+        }
+    }
+
 @app.post("/stream_task")
 async def stream_task(body: TaskRequest, request: Request):
-    """
-    SSE 流式接口: 启动或恢复任务
-    """
     async def event_generator():
         workflow_stream = run_workflow(
             user_input=body.user_input, 
@@ -41,7 +90,7 @@ async def stream_task(body: TaskRequest, request: Request):
         try:
             async for event_type, data in workflow_stream:
                 if await request.is_disconnected():
-                    print("⚠️ Client disconnected, stopping workflow.")
+                    logger.info("client_disconnected")
                     break
                 
                 yield {
@@ -51,8 +100,7 @@ async def stream_task(body: TaskRequest, request: Request):
                 await asyncio.sleep(0.01)
 
         except Exception as e:
-            import traceback
-            traceback.print_exc()
+            logger.error("stream_error", exc_info=True)
             yield {
                 "event": "error",
                 "data": json.dumps({"error": str(e)}, ensure_ascii=False)
@@ -62,34 +110,14 @@ async def stream_task(body: TaskRequest, request: Request):
 
 @app.post("/feedback")
 async def submit_feedback(body: FeedbackRequest):
-    """
-    [New] 专门的反馈接口
-    用于 HITL 场景下，用户提交修改意见或批准执行。
-    这会将反馈注入到 State 中，并准备好让 stream_task 恢复执行。
-    """
     thread_id = body.thread_id
-    feedback_text = body.feedback
-    
     if not thread_id:
         raise HTTPException(status_code=400, detail="Thread ID is required")
         
-    print(f"📨 Received Feedback for {thread_id}: {feedback_text}")
-    
-    # 逻辑：实际上，run_workflow 内部已经处理了 snapshot 的读取。
-    # 这里我们只需要确认服务器收到请求，真正的状态更新会在下一次 /stream_task 调用时，
-    # 或者如果我们需要实时更新状态而不触发 run，可以在这里操作 checkpointer。
-    # 为了简化，LangGraph 推荐的方式是：更新 state -> resume。
-    # 本示例中，前端提交 feedback 后通常会重新调用 /stream_task 来观看后续流。
-    # 所以这里只需要返回成功即可，具体的 State 更新逻辑已经在 run_workflow 的 "Resuming from pause" 部分处理了。
-    # 但为了更严谨，我们其实可以将 feedback 写入一个临时队列或直接在这里 update_state。
-    
-    # 方案：为了配合现有的 engine.py 逻辑 (它在启动时检查 snapshot)，
-    # 我们这里仅仅是一个语义化的 Endpoint。前端调用完这个，紧接着调用 stream_task 即可。
-    
-    return {"status": "received", "message": "Feedback queued. Please reconnect stream to resume."}
+    logger.info(f"feedback_received", extra={"extra_data": {"thread": thread_id}})
+    return {"status": "received", "message": "Feedback queued."}
 
 if __name__ == "__main__":
     import uvicorn
     print("🚀 Starting API Server on http://0.0.0.0:8000")
-    print("📱 Frontend available at http://0.0.0.0:8000/static/index.html")
     uvicorn.run(app, host="0.0.0.0", port=8000)
