@@ -21,11 +21,17 @@ def build_coding_crew_graph(rotator: GeminiKeyRotator) -> StateGraph:
     nodes = CodingCrewNodes(rotator)
     workflow = StateGraph(CodingCrewState)
     
+    # 定义节点
     workflow.add_node("coder", nodes.coder_node)
+    workflow.add_node("executor", nodes.executor_node) # [New] 执行节点
     workflow.add_node("reviewer", nodes.reviewer_node)
     
+    # 定义流程
     workflow.set_entry_point("coder")
-    workflow.add_edge("coder", "reviewer")
+    
+    # 流程变更为: Coder -> Executor -> Reviewer
+    workflow.add_edge("coder", "executor")
+    workflow.add_edge("executor", "reviewer")
     
     workflow.add_conditional_edges(
         "reviewer",
