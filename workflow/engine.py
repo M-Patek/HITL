@@ -1,7 +1,9 @@
 import asyncio
 import json
 import logging
-from typing import AsyncGenerator, Dict, Any, List
+import uuid
+from typing import AsyncGenerator, Dict, Any, List, Optional
+from datetime import datetime
 
 from langgraph.checkpoint.memory import MemorySaver
 
@@ -9,9 +11,9 @@ from config.keys import GATEWAY_API_BASE, GATEWAY_SECRET, PINECONE_API_KEY, PINE
 from core.rotator import GeminiKeyRotator
 from tools.memory import VectorMemoryTool
 from tools.search import GoogleSearchTool
-from core.models import ProjectState, TaskNode
+from core.models import ProjectState, TaskNode, TaskStatus, ArtifactVersion
 from workflow.graph import build_agent_workflow
-from core.logger_setup import node_id_ctx # [New] Context management
+from core.logger_setup import node_id_ctx, trace_id_ctx, phase_ctx, token_usage_ctx
 
 logger = logging.getLogger("Brain-Engine")
 GLOBAL_CHECKPOINTER = MemorySaver()
@@ -32,7 +34,7 @@ def get_breadcrumbs(state: ProjectState) -> List[Dict[str, str]]:
         
         breadcrumbs.append({
             "id": node.node_id,
-            "label": node.instruction[:30], # 截断显示
+            "label": node.instruction[:30], 
             "level": node.level,
             "status": node.status
         })
@@ -40,18 +42,31 @@ def get_breadcrumbs(state: ProjectState) -> List[Dict[str, str]]:
         
     return list(reversed(breadcrumbs))
 
+def validate_subtree_output(node: TaskNode) -> Dict[str, Any]:
+    if node.status != TaskStatus.COMPLETED:
+        return {"valid": True}
+    if not node.semantic_summary:
+        return {"valid": False, "msg": "Protocol Violation: Missing Summary"}
+    if len(node.semantic_summary) < 10:
+        return {"valid": False, "msg": "Protocol Violation: Summary too short"}
+    return {"valid": True}
+
 async def run_workflow(user_input: str, thread_id: str) -> AsyncGenerator[Dict[str, Any], None]:
     if _app is None:
         yield {"event_type": "error", "data": "Workflow Engine not initialized."}
         return
 
+    current_trace_id = trace_id_ctx.get()
+    if not current_trace_id:
+        current_trace_id = str(uuid.uuid4())
+        trace_id_ctx.set(current_trace_id)
+
     config = {"configurable": {"thread_id": thread_id}}
+    
     snapshot = _app.get_state(config)
     current_input = None
     
-    # 1. 初始化或恢复
     if not snapshot.values:
-        # [New] 使用树状结构初始化
         ps = ProjectState.init_from_task(user_input, f"T-{thread_id[-4:]}")
         current_input = {"project_state": ps}
         yield {"event_type": "status", "data": f"🚀 S.W.A.R.M. Tree Initialized: {ps.task_id}"}
@@ -64,29 +79,47 @@ async def run_workflow(user_input: str, thread_id: str) -> AsyncGenerator[Dict[s
                 if ps:
                     ps.user_feedback_queue = user_input
                     _app.update_state(config, {"project_state": ps})
-                    yield {"event_type": "feedback", "data": "User feedback injected."}
             current_input = None
         else:
             yield {"event_type": "warning", "data": "Task already completed."}
             return
 
-    # 2. 执行循环
+    last_phase = None
+    sent_images = set() 
+    sent_code_hashes = set()
+
     try:
         async for event in _app.astream(current_input, config=config, stream_mode="values"):
             if 'project_state' not in event: continue
             ps: ProjectState = event['project_state']
             
-            # [Observability] 注入当前的 Node ID 到日志上下文
-            if ps.active_node_id:
-                node_id_ctx.set(ps.active_node_id)
-            
-            # A. 错误处理
+            active_node = ps.get_active_node()
+            if active_node:
+                node_id_ctx.set(active_node.node_id)
+                current_phase = active_node.stage_protocol.current_phase
+                phase_ctx.set(current_phase)
+                
+                if current_phase != last_phase:
+                    yield {
+                        "event_type": "protocol_step_start",
+                        "data": {
+                            "phase": current_phase,
+                            "node_id": active_node.node_id,
+                            "timestamp": datetime.now().isoformat()
+                        }
+                    }
+                    last_phase = current_phase
+
+                if active_node.status == TaskStatus.COMPLETED:
+                    validation = validate_subtree_output(active_node)
+                    if not validation["valid"]:
+                        yield {"event_type": "warning", "data": f"⚠️ {validation['msg']}"}
+
             if ps.last_error:
                 yield {"event_type": "error", "data": ps.last_error}
-                ps.last_error = None # Clear after reporting
+                ps.last_error = None
                 continue
             
-            # B. 决策变更
             yield {
                 "event_type": "update", 
                 "data": {
@@ -95,28 +128,49 @@ async def run_workflow(user_input: str, thread_id: str) -> AsyncGenerator[Dict[s
                 }
             }
             
-            # C. [New] 树状结构更新 (面包屑)
-            yield {
-                "event_type": "tree_update",
-                "data": get_breadcrumbs(ps)
-            }
+            yield {"event_type": "tree_update", "data": get_breadcrumbs(ps)}
             
-            # D. 代码块
+            # [Version Control] Code
             if ps.code_blocks:
                 latest_agent = list(ps.code_blocks.keys())[-1]
-                yield {"event_type": "artifact_code", "data": ps.code_blocks[latest_agent]}
+                code_content = ps.code_blocks[latest_agent]
+                code_hash = hash(code_content)
+                
+                if code_hash not in sent_code_hashes:
+                    ver_count = len([x for x in ps.artifact_history if x.type == "code"]) + 1
+                    version = ArtifactVersion(
+                        trace_id=trace_id_ctx.get(), # [Phase 4] Inject Trace ID
+                        node_id=ps.active_node_id,
+                        type="code",
+                        content=code_content,
+                        label=f"v{ver_count}"
+                    )
+                    ps.artifact_history.append(version)
+                    yield {"event_type": "artifact_code", "data": version.model_dump()}
+                    sent_code_hashes.add(code_hash)
             
-            # E. 报告
+            # [Version Control] Images
+            if "images" in ps.artifacts:
+                for img in ps.artifacts["images"]:
+                    if img['filename'] not in sent_images:
+                        ver_count = len([x for x in ps.artifact_history if x.type == "image"]) + 1
+                        version = ArtifactVersion(
+                            trace_id=trace_id_ctx.get(), # [Phase 4] Inject Trace ID
+                            node_id=ps.active_node_id,
+                            type="image",
+                            content=img,
+                            label=f"img-{ver_count}"
+                        )
+                        ps.artifact_history.append(version)
+                        yield {"event_type": "artifact_image", "data": version.model_dump()}
+                        sent_images.add(img['filename'])
+            
             if ps.final_report:
                 yield {"event_type": "final_report", "data": ps.final_report}
 
-        # 3. 结束
         final_snapshot = _app.get_state(config)
         if final_snapshot.next:
-            yield {
-                "event_type": "interrupt", 
-                "data": {"node": final_snapshot.next[0], "msg": "Paused for HITL."}
-            }
+            yield {"event_type": "interrupt", "data": {"node": final_snapshot.next[0], "msg": "Paused for HITL."}}
         else:
             yield {"event_type": "finish", "data": "✅ All tasks completed."}
 
