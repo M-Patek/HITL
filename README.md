@@ -1,81 +1,52 @@
-# 🤖 Gemini Multi-Agent Swarm (HITL)
+# 🤖 Gemini Multi-Agent Swarm (SWARM 3.0)
 
-这是一个基于 **Google Gemini API** 和 **LangGraph** 构建的高级多智能体（Multi-Agent）协作系统。本平台通过模块化解耦、资源调度和语义记忆，实现了工业级的“规划-执行-反馈”闭环，并深度集成了 **人机协作 (Human-in-the-Loop, HITL)** 机制。
+这是一个基于 **Google Gemini 2.5 系列 API** 和 **LangGraph** 构建的工业级多智能体协作系统。本系统不仅实现了“规划-执行-反馈”的闭环，更通过独创的**分层任务树 (Hierarchical Task Tree)** 和 **RAPTOR 语义压缩**技术，解决了复杂长任务中的上下文爆炸与逻辑漂移问题。
 
-## ✨ 核心特性
+## ✨ 核心前沿特性
 
-* **动态任务调度 (Supervisor Mode)**：由 `OrchestratorAgent` 充当核心大脑，基于项目状态实时做出单步决策，灵活决定下一个执行 Agent。
-* **人机协作循环 (HITL)**：在执行代码编写或数据分析等关键任务前，系统会自动进入中断状态，支持人工审批、修改指令或提供实时反馈。
-* **多专业智能体团队 (Crews)**：
-    * **Coding Crew**：具备 Python AST 语法自动检查与自愈能力，包含 Coder 和严格的 Reviewer。
-    * **Data Crew**：数据科学家与商业分析师协作，确保技术报告具备实际的可执行商业价值。
-    * **Content Crew**：创意作家与主编配合，打磨富有感染力且结构严谨的文字内容。
-* **自动 API Key 轮询 (Key Rotation)**：内置 `GeminiKeyRotator`，支持多个 API Key 轮换与自动重试，有效应对 API 限速和故障。
-* **语义记忆库 (RAG Ready)**：集成 Pinecone 向量数据库，支持跨任务的上下文存储与精准检索。
-* **双端交互支持**：
-    * **CLI 模式**：交互式命令行工具，支持图片输入和实时状态干预。
-    * **Web 模式**：基于 FastAPI 和 SSE (Server-Sent Events) 的流式后端，配合响应式控制台。
+### 🌲 分层任务树 (Hierarchical Task Tree)
+系统不再采用扁平的对话流，而是将任务解析为递归的树状结构：
+* **项目级 (Root)**：全局目标与战略规划。
+* **子树级 (Sub-tree)**：专业智能体小组（Crew）的阶段性任务，完成后自动执行语义回归总结。
+* **子叶级 (Leaf)**：具体的执行动作（如 Coder 编写、Reviewer 审查），任务细节在子树内部消化，不污染主图上下文。
+
+### 🧠 动态上下文与 RAPTOR 压缩
+* **语义剪枝**：当子树任务完成后，系统自动触发 RAPTOR 递归总结，将冗长的调试细节压缩为高维语义节点，确保主控 (Orchestrator) 决策永远基于最精华的信息。
+* **按需加载**：Orchestrator 根据当前任务深度，动态从 `MemoryTree` 中提取关联上下文，实现极致的 Token 利用率。
+
+### ⚡ 性能与成本极致平衡
+* **模型分层路由 (Tiered Routing)**：自动识别任务复杂度。简单总结由 **Gemini 1.5 Flash** 处理，复杂代码由 **Gemini 1.5 Pro** 负责。
+* **预测性预热 (Speculative Execution)**：系统会预判下一步动作，异步预热 Docker 沙箱或预加载搜索结果，大幅降低首字延迟。
+
+### 🎨 Canvas 画布级交互
+* **双栏协作界面**：左侧展示流式思考过程，右侧“画布区”动态渲染生成的代码、HTML 预览及高清晰度图表。
+* **版本控制与溯源**：支持 Artifacts 的版本回溯，每一个产物都与具体的 `TaskNode` 和 `Trace ID` 绑定。
 
 ## 📂 项目结构
 
 ```text
 ├── agents/
-│   ├── orchestrator/    # 任务分解与动态规划核心
+│   ├── orchestrator/    # 具备 ReAct 逻辑的动态调度核心
+│   ├── planner/         # 全局战略计划制定者
 │   ├── crews/           # 专业 Agent 小组 (Coding, Data, Content)
-│   └── agents.py        # 研究员 (Researcher) 等单点 Agent 定义
+│   └── agents.py        # 具备搜索增强能力的单点 Agent
 ├── core/
-│   ├── rotator.py       # API Key 轮询管理器
-│   ├── models.py        # 统一的 Pydantic 数据模型与 Artifacts 定义
-│   └── api_models.py    # API 接口数据结构
+│   ├── protocol.py      # 标准化协作协议 (MCP 兼容)
+│   ├── models.py        # 树状任务模型与 Pydantic 数据定义
+│   └── rotator.py       # 支持模型分级的 API 轮询管理器
 ├── tools/
-│   ├── search.py        # 具备自动降级策略的搜索工具
-│   └── memory.py        # 基于 Pinecone 的向量记忆库
+│   ├── registry.py      # 工具标准化注册中心
+│   ├── sandbox.py       # 视觉增强型 Docker 安全沙箱
+│   └── memory.py        # 支持 RAPTOR 树状检索的向量记忆库
 ├── workflow/
-│   ├── graph.py         # 基于 LangGraph 的状态机主图构建
-│   └── engine.py        # 异步流式执行引擎
-├── api_server.py        # FastAPI SSE 后端服务器
-└── main.py              # CLI 交互式启动入口
+│   ├── graph.py         # 基于任务树回归的 LangGraph 主图
+│   └── engine.py        # 异步流式执行与预测性预热引擎
+└── static/              # Canvas 2.0 响应式前端交互系统
 ```
 
 ## 🚀 快速启动
 
-### 1. 环境准备
-推荐使用 Python 3.11 环境：
-```bash
-pip install -r requirements.txt
-```
-*主要依赖包括：`langgraph`, `google-genai`, `fastapi`, `pydantic`, `pinecone-client`, `sse-starlette`。*
-
-### 2. 配置环境变量
-在项目根目录创建 `.env` 文件：
-```env
-# Gemini API Keys，多个 Key 用逗号分隔
-GEMINI_API_KEYS="key1,key2,key3"
-
-# Pinecone (RAG) 配置
-PINECONE_API_KEY="您的API_KEY"
-PINECONE_ENVIRONMENT="您的环境名称"
-VECTOR_INDEX_NAME="agent-memory-index"
-```
-
-### 3. 运行平台
-* **交互式 CLI 模式**：
-    ```bash
-    python main.py
-    ```
-* **Web API 服务**：
-    ```bash
-    python api_server.py
-    ```
-    启动后访问 `http://localhost:8000/static/index.html` 进入 HITL 控制台。
-
-## 🛠️ 工作流逻辑
-
-1.  **状态初始化**：系统创建 `ProjectState`，包含用户输入、图片数据及对话历史。
-2.  **Orchestrator 规划**：调度器分析当前 Artifacts 和历史，决定下一步执行的 Agent 及指令。
-3.  **Crew 内循环迭代**：如 Coding Crew 内部会进行“编写-审查-修复”的循环，直至通过或达到最大迭代次数。
-4.  **人机协作中断**：在进入关键 Crew 节点前，系统会触发 `interrupt_before`，等待用户审批或修改状态。
-5.  **结果交付**：任务完成后生成结构化的研究报告、代码包或分析文档。
-
----
-*基于 Gemini 2.5 Flash 驱动的多 Agent 系统*
+1.  **配置环境**：安装 `requirements.txt` 中的依赖。
+2.  **设置密钥**：在 `.env` 中配置多级 Gemini API Keys。
+3.  **启动后端**：运行 `python api_server.py`。
+4.  **开启画布**：访问 `http://localhost:8000/static/index.html` 进入 SWARM 工作站。
