@@ -3,214 +3,439 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Gemini Agent Swarm - HITL Console</title>
+    <title>Gemini Agent Swarm - Studio Pro</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css" rel="stylesheet" />
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-python.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/9.1.2/marked.min.js"></script>
+    
     <style>
         :root {
             --bg-color: #1e1e1e;
-            --term-bg: #2d2d2d;
-            --text-color: #e0e0e0;
+            --panel-bg: #252526;
+            --border-color: #333;
             --accent: #4caf50;
-            --danger: #f44336;
-            --info: #2196f3;
+            --purple: #9c27b0;
+            --warn: #ff9800;
+            --text: #ccc;
         }
+
         body {
             font-family: 'Segoe UI', monospace, sans-serif;
             background-color: var(--bg-color);
-            color: var(--text-color);
-            margin: 0;
-            padding: 20px;
-            display: flex;
-            flex-direction: column;
-            height: 100vh;
-            box-sizing: border-box;
-        }
-        h1 { margin-top: 0; font-size: 1.5rem; color: var(--accent); }
-        
-        .controls {
-            display: flex;
-            gap: 10px;
-            margin-bottom: 15px;
-            flex-wrap: wrap;
-        }
-        input[type="text"] {
-            flex: 1;
-            padding: 10px;
-            border-radius: 4px;
-            border: 1px solid #444;
-            background: #333;
-            color: #fff;
-            min-width: 300px;
-        }
-        button {
-            padding: 10px 20px;
-            border: none;
-            border-radius: 4px;
-            cursor: pointer;
-            font-weight: bold;
-            transition: background 0.2s;
-        }
-        #btn-submit { background-color: var(--accent); color: #000; }
-        #btn-submit:hover { background-color: #43a047; }
-        #btn-submit:disabled { background-color: #555; cursor: not-allowed; }
-        
-        #log-container {
-            flex: 1;
-            background-color: var(--term-bg);
-            border-radius: 6px;
-            padding: 15px;
-            overflow-y: auto;
-            border: 1px solid #444;
-            font-family: 'Consolas', 'Monaco', monospace;
-            white-space: pre-wrap;
-            display: flex;
-            flex-direction: column;
-            gap: 5px;
+            color: var(--text);
+            margin: 0; height: 100vh;
+            display: flex; flex-direction: column; overflow: hidden;
         }
 
-        .log-entry { padding: 4px 0; border-bottom: 1px solid #3a3a3a; }
-        .log-time { color: #888; font-size: 0.8em; margin-right: 8px; }
+        /* --- Header --- */
+        header { background: #2d2d2d; padding: 10px 20px; border-bottom: 1px solid var(--border-color); height: 130px; flex-shrink: 0; box-sizing: border-box; }
+        .top-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+        h1 { margin: 0; font-size: 1.1rem; color: var(--accent); display: flex; align-items: center; gap: 10px; }
+        .phase-badge { font-size: 0.7rem; padding: 2px 8px; border-radius: 4px; background: #444; color: #fff; text-transform: uppercase; }
         
-        .type-update { color: #aaa; }
-        .type-node_finished { color: var(--info); font-weight: bold; }
-        .type-artifact_code { color: #ce9178; background: #252526; padding: 5px; border-radius: 3px; }
-        .type-final_report { color: var(--accent); border: 1px solid var(--accent); padding: 10px; margin: 10px 0; background: #1e3a20; }
-        .type-error { color: var(--danger); font-weight: bold; }
-        .type-finish { color: var(--accent); font-weight: bold; text-align: center; margin-top: 20px; }
+        #protocol-status { display: flex; gap: 2px; height: 4px; background: #333; border-radius: 2px; overflow: hidden; margin-bottom: 10px; }
+        .proto-segment { flex: 1; background: #444; transition: 0.3s; }
+        .proto-segment.active { background: var(--accent); box-shadow: 0 0 8px var(--accent); }
 
-        /* Cursor blinking animation */
-        .cursor::after {
-            content: '▋';
-            animation: blink 1s step-end infinite;
+        #breadcrumb-bar { 
+            background: #1e1e1e; border: 1px solid #333; padding: 4px 10px; border-radius: 4px; 
+            display: flex; gap: 5px; flex-wrap: wrap; margin-bottom: 10px; height: 20px; align-items: center; font-size: 0.85rem;
         }
-        @keyframes blink { 50% { opacity: 0; } }
+        .crumb-item { color: #aaa; display: flex; align-items: center; }
+        .crumb-sep { color: #555; margin: 0 5px; }
+
+        .controls { display: flex; gap: 10px; }
+        input { flex: 1; padding: 8px; background: #333; color: #fff; border: 1px solid #444; border-radius: 4px; }
+        button { padding: 8px 16px; background: var(--accent); border: none; cursor: pointer; border-radius: 4px; color: #fff; font-weight: bold; }
+
+        /* --- Layout --- */
+        #main-layout { display: flex; flex: 1; overflow: hidden; position: relative; }
+        #left-panel { flex: 0 0 35%; background: var(--panel-bg); border-right: 1px solid var(--border-color); display: flex; flex-direction: column; min-width: 300px; }
+        .panel-header { padding: 8px 15px; background: #333; font-size: 0.8rem; font-weight: bold; display: flex; justify-content: space-between; align-items: center; color: #eee; }
+        
+        #log-container { flex: 1; padding: 15px; overflow-y: auto; font-family: 'Consolas', monospace; font-size: 0.85em; scroll-behavior: smooth; }
+        .log-entry { padding: 5px 0; border-bottom: 1px solid #333; line-height: 1.4; transition: background 0.3s; }
+        .log-entry.highlight { background: rgba(76, 175, 80, 0.2); }
+        .log-time { color: #555; margin-right: 8px; font-size: 0.9em; }
+        .type-protocol_step_start { color: var(--purple); margin: 5px 0; padding-left: 8px; border-left: 2px solid var(--purple); }
+
+        #resizer { width: 5px; cursor: col-resize; background: #2d2d2d; z-index: 10; }
+        #right-panel { flex: 1; background: #1e1e1e; display: flex; flex-direction: column; min-width: 400px; position: relative; }
+
+        /* --- Canvas --- */
+        #canvas-header { display: flex; justify-content: space-between; align-items: center; padding: 8px 15px; background: #252526; border-bottom: 1px solid #333; }
+        
+        /* View Controls */
+        #view-controls { display: flex; gap: 5px; margin-right: 15px; }
+        .view-btn { background: transparent; border: 1px solid #444; color: #888; padding: 2px 6px; border-radius: 3px; cursor: pointer; font-size: 0.75rem; }
+        .view-btn.active { background: #444; color: #fff; border-color: #666; }
+
+        #version-controls { display: flex; align-items: center; gap: 10px; font-size: 0.85rem; }
+        .ver-btn { background: transparent; border: 1px solid #444; color: #aaa; padding: 2px 8px; border-radius: 3px; cursor: pointer; }
+        .ver-btn:disabled { opacity: 0.3; }
+        
+        #canvas-viewport { flex: 1; padding: 20px; overflow-y: auto; position: relative; }
+        
+        /* Artifact Header */
+        .art-meta-header { 
+            display: flex; justify-content: space-between; align-items: center; 
+            background: #222; padding: 5px 10px; border-bottom: 1px solid #444; font-size: 0.8rem; color: #888;
+        }
+        .art-meta-info span { margin-right: 15px; cursor: pointer; }
+        .art-meta-info span:hover { color: var(--accent); text-decoration: underline; }
+        .quote-btn { 
+            background: transparent; border: 1px solid #555; color: #aaa; padding: 2px 8px; border-radius: 3px; cursor: pointer; font-size: 0.75rem;
+        }
+
+        .code-container { border: 1px solid #444; border-radius: 4px; overflow: hidden; margin-bottom: 10px; }
+        
+        /* Image Card (Lazy Load Ready) */
+        .image-card { 
+            text-align: center; background: #252526; padding: 10px; border-radius: 8px; border: 1px solid #444; margin-bottom: 20px;
+            min-height: 200px; display: flex; flex-direction: column; justify-content: center;
+        }
+        .image-card img { 
+            max-width: 100%; box-shadow: 0 5px 15px rgba(0,0,0,0.5); 
+            opacity: 0; transition: opacity 0.5s; 
+        }
+        .image-card img.loaded { opacity: 1; }
+        .lazy-placeholder { color: #555; font-style: italic; }
+
+        /* Gallery Grid */
+        .gallery-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 15px; }
+
+        /* Overlays */
+        #canvas-overlay { 
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%; 
+            background: rgba(0,0,0,0.3); backdrop-filter: blur(4px); 
+            display: flex; justify-content: center; align-items: center; 
+            z-index: 20; opacity: 0; pointer-events: none; transition: opacity 0.3s; 
+        }
+        #canvas-overlay.visible { opacity: 1; pointer-events: all; }
+        .spinner { font-size: 2rem; color: var(--accent); animation: spin 1s linear infinite; }
+        @keyframes spin { 100% { transform: rotate(360deg); } }
+        
+        #hitl-banner { 
+            background: var(--warn); color: #000; padding: 8px; text-align: center; font-weight: bold; font-size: 0.9rem; display: none; 
+        }
     </style>
 </head>
 <body>
 
-    <h1>🤖 Gemini Multi-Agent Swarm (HITL)</h1>
-    
-    <div class="controls">
-        <input type="text" id="input-task" placeholder="Enter your complex task here..." value="Analyze the future of AI agents">
-        <input type="text" id="input-thread" placeholder="Thread ID (optional)" style="flex: 0 0 150px;">
-        <button id="btn-submit" onclick="startTask()">🚀 Start Mission</button>
-    </div>
+    <header>
+        <div class="top-row">
+            <h1><i class="fas fa-robot"></i> Gemini Swarm <span id="current-phase" class="phase-badge">IDLE</span></h1>
+            <div id="protocol-status">
+                <div id="p-plan" class="proto-segment" title="Plan"></div>
+                <div id="p-exec" class="proto-segment" title="Execute"></div>
+                <div id="p-summ" class="proto-segment" title="Summary"></div>
+            </div>
+        </div>
+        <div id="breadcrumb-bar"><span class="crumb-item">System Ready</span></div>
+        <div class="controls">
+            <input type="text" id="input-task" value="Generate a fractal tree in Python" placeholder="Enter task...">
+            <input type="text" id="input-thread" placeholder="Thread ID" style="flex: 0 0 80px;">
+            <button onclick="startTask()"><i class="fas fa-play"></i> Run</button>
+        </div>
+    </header>
 
-    <div id="log-container">
-        <div class="log-entry" style="color: #666;">System ready. Waiting for input...</div>
+    <div id="main-layout">
+        <aside id="left-panel">
+            <div class="panel-header"><span>LOG STREAM</span></div>
+            <div id="log-container"></div>
+        </aside>
+        <div id="resizer"></div>
+        <main id="right-panel">
+            <div id="hitl-banner"><i class="fas fa-hand-paper"></i> HITL REQUIRED</div>
+            <div class="panel-header" id="canvas-header">
+                <div style="display:flex; align-items:center;">
+                    <span style="margin-right:15px;">CANVAS</span>
+                    <div id="view-controls">
+                        <button class="view-btn active" id="btn-view-single" onclick="switchView('single')"><i class="fas fa-square"></i> Single</button>
+                        <button class="view-btn" id="btn-view-gallery" onclick="switchView('gallery')"><i class="fas fa-th-large"></i> Gallery</button>
+                    </div>
+                </div>
+                <div id="version-controls">
+                    <button class="ver-btn" id="btn-prev" onclick="navVersion(-1)" disabled><i class="fas fa-chevron-left"></i></button>
+                    <span id="ver-label">LATEST</span>
+                    <button class="ver-btn" id="btn-next" onclick="navVersion(1)" disabled><i class="fas fa-chevron-right"></i></button>
+                </div>
+            </div>
+            <div id="canvas-viewport"></div>
+            <div id="canvas-overlay">
+                <div style="text-align:center;">
+                    <i class="fas fa-circle-notch spinner"></i>
+                    <div style="margin-top:10px; color:#fff; font-weight:bold;">Orchestrator is thinking...</div>
+                </div>
+            </div>
+        </main>
     </div>
 
     <script>
-        const logContainer = document.getElementById('log-container');
-        const btnSubmit = document.getElementById('btn-submit');
+        let artifactHistory = [];
+        let currentVerIndex = -1;
+        let currentViewMode = 'single'; // 'single' | 'gallery'
         
+        // Lazy Load Observer
+        let imageObserver;
+
+        const logContainer = document.getElementById('log-container');
+        const phaseBadge = document.getElementById('current-phase');
+        const breadcrumbBar = document.getElementById('breadcrumb-bar');
+        const overlay = document.getElementById('canvas-overlay');
+        const hitlBanner = document.getElementById('hitl-banner');
+
+        // --- Init Observer ---
+        function initObserver() {
+            if (imageObserver) imageObserver.disconnect();
+            imageObserver = new IntersectionObserver((entries, observer) => {
+                entries.forEach(entry => {
+                    if (entry.isIntersecting) {
+                        const img = entry.target;
+                        const blobKey = img.dataset.blobKey; // Index in history
+                        loadImageFromBlob(img, blobKey);
+                        observer.unobserve(img);
+                    }
+                });
+            }, { root: document.getElementById('canvas-viewport'), rootMargin: '50px' });
+        }
+
         async function startTask() {
-            const taskInput = document.getElementById('input-task').value.trim();
-            const threadId = document.getElementById('input-thread').value.trim() || `web-thread-${Date.now()}`;
+            const taskInput = document.getElementById('input-task').value;
+            const threadId = document.getElementById('input-thread').value || `t-${Date.now()}`;
+            logContainer.innerHTML = ''; artifactHistory = []; currentVerIndex = -1; updateVersionUI();
+            setPhase('INITIALIZING'); hitlBanner.style.display = 'none';
+            initObserver();
             
-            if (!taskInput) return alert("Please enter a task.");
-
-            // UI Reset
-            btnSubmit.disabled = true;
-            logContainer.innerHTML = '';
-            appendLog('system', `🚀 Starting task on thread: ${threadId}...`);
-
             try {
                 const response = await fetch('/stream_task', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ user_input: taskInput, thread_id: threadId })
                 });
-
-                if (!response.ok) throw new Error(`HTTP Error: ${response.status}`);
-
-                // Setup Stream Reader
                 const reader = response.body.getReader();
                 const decoder = new TextDecoder();
                 let buffer = '';
-
                 while (true) {
-                    const { done, value } = await reader.read();
-                    if (done) break;
-
-                    const chunk = decoder.decode(value, { stream: true });
-                    buffer += chunk;
-                    
-                    // Process complete SSE messages (separated by double newline)
-                    const parts = buffer.split('\n\n');
-                    buffer = parts.pop(); // Keep incomplete part in buffer
-
-                    for (const part of parts) {
-                        if (!part.trim()) continue;
-                        parseSSE(part);
-                    }
+                    const { done, value } = await reader.read(); if (done) break;
+                    buffer += decoder.decode(value, { stream: true });
+                    const parts = buffer.split('\n\n'); buffer = parts.pop();
+                    parts.forEach(parseSSE);
                 }
-
-            } catch (e) {
-                appendLog('error', `❌ Connection Error: ${e.message}`);
-            } finally {
-                btnSubmit.disabled = false;
-                appendLog('system', '--- Stream Closed ---');
-            }
+            } catch (e) { appendLog('error', e.message); }
         }
 
         function parseSSE(block) {
+            if (!block.trim()) return;
             const lines = block.split('\n');
-            let eventType = 'update';
-            let data = null;
-
-            for (const line of lines) {
-                if (line.startsWith('event: ')) eventType = line.substring(7).trim();
-                else if (line.startsWith('data: ')) {
-                    try {
-                        data = JSON.parse(line.substring(6));
-                    } catch (e) {
-                        data = line.substring(6);
-                    }
-                }
-            }
-
-            if (data) handleEvent(eventType, data);
+            let type = 'update', data = null;
+            lines.forEach(line => {
+                if (line.startsWith('event: ')) type = line.substring(7);
+                else if (line.startsWith('data: ')) { try { data = JSON.parse(line.substring(6)); } catch { data = line.substring(6); } }
+            });
+            if (data) handleEvent(type, data);
         }
 
         function handleEvent(type, data) {
-            // Map SSE events to UI styles
-            if (type === 'end') {
-                appendLog('finish', data);
-                return;
-            }
-            if (type === 'error') {
-                appendLog('error', typeof data === 'string' ? data : JSON.stringify(data));
-                return;
-            }
+            if (type === 'update' && data.status === 'tool') overlay.classList.add('visible');
+            else if (type === 'interrupt') { overlay.classList.remove('visible'); hitlBanner.style.display = 'block'; appendLog('interrupt', data.msg); }
+            else overlay.classList.remove('visible');
 
-            // Custom logic for data payloads
-            if (data.event_type === 'node_finished') {
-                const info = data.data;
-                appendLog('node_finished', `✅ [${info.node}] completed. Decision: ${info.router_decision}`);
-            } 
-            else if (data.event_type === 'artifact_code') {
-                appendLog('artifact_code', `📜 Code Generated:\n${data.data}`);
+            if (type === 'protocol_step_start') {
+                setPhase(data.phase);
+                appendLog('info', `Phase: ${data.phase}`, data.node_id);
+            } else if (type === 'tree_update') {
+                renderBreadcrumbs(data);
+            } else if (type === 'artifact_code' || type === 'artifact_image') {
+                
+                // [Optimization] Convert Base64 to Blob immediately
+                if (type === 'artifact_image' && data.content.data) {
+                    const blob = base64ToBlob(data.content.data, data.content.mime_type);
+                    data.content.blob = blob;
+                    data.content.data = null; // Free memory!
+                }
+                
+                artifactHistory.push(data); currentVerIndex = artifactHistory.length - 1;
+                refreshCanvas(); // Smart refresh
+                updateVersionUI();
+                appendLog('artifact', `Generated ${data.type} (${data.label})`, data.node_id);
+                
+            } else if (type === 'final_report') {
+                const reportArt = { type: 'report', content: data, label: 'FINAL', node_id: 'report' };
+                artifactHistory.push(reportArt); currentVerIndex = artifactHistory.length - 1;
+                refreshCanvas(); updateVersionUI(); setPhase('COMPLETED');
+            } else { if (type !== 'update') appendLog(type, typeof data === 'string' ? data : JSON.stringify(data)); }
+        }
+
+        // --- Memory Optimization ---
+        function base64ToBlob(b64Data, contentType) {
+            const byteCharacters = atob(b64Data);
+            const byteArrays = [];
+            for (let offset = 0; offset < byteCharacters.length; offset += 512) {
+                const slice = byteCharacters.slice(offset, offset + 512);
+                const byteNumbers = new Array(slice.length);
+                for (let i = 0; i < slice.length; i++) byteNumbers[i] = slice.charCodeAt(i);
+                byteArrays.push(new Uint8Array(byteNumbers));
             }
-            else if (data.event_type === 'final_report') {
-                appendLog('final_report', `📄 FINAL REPORT:\n${data.data}`);
-            }
-            else {
-                // Default / Status updates
-                const msg = typeof data === 'string' ? data : (data.data || JSON.stringify(data));
-                appendLog('update', `ℹ️ ${msg}`);
+            return new Blob(byteArrays, {type: contentType});
+        }
+
+        function loadImageFromBlob(imgEl, index) {
+            const art = artifactHistory[index];
+            if (art && art.content.blob) {
+                const url = URL.createObjectURL(art.content.blob);
+                imgEl.src = url;
+                imgEl.onload = () => {
+                    imgEl.classList.add('loaded');
+                    // Optional: revoke URL later if needed, but keeping for gallery nav
+                };
             }
         }
 
-        function appendLog(type, text) {
-            const div = document.createElement('div');
-            div.className = `log-entry type-${type}`;
+        // --- View Logic ---
+        function switchView(mode) {
+            currentViewMode = mode;
+            document.getElementById('btn-view-single').classList.toggle('active', mode === 'single');
+            document.getElementById('btn-view-gallery').classList.toggle('active', mode === 'gallery');
+            document.getElementById('version-controls').style.display = mode === 'single' ? 'flex' : 'none';
+            refreshCanvas();
+        }
+
+        function refreshCanvas() {
+            const vp = document.getElementById('canvas-viewport');
             
+            if (currentViewMode === 'gallery') {
+                // Render All Images in Grid
+                vp.innerHTML = '<div class="gallery-grid" id="gallery-container"></div>';
+                const grid = document.getElementById('gallery-container');
+                
+                const images = artifactHistory.map((art, idx) => ({art, idx})).filter(x => x.art.type === 'image');
+                
+                if (images.length === 0) {
+                    vp.innerHTML = '<div style="text-align:center; padding-top:50px; color:#555;">No images in gallery</div>';
+                    return;
+                }
+
+                images.forEach(({art, idx}) => {
+                    const div = document.createElement('div');
+                    div.className = 'image-card';
+                    div.innerHTML = `
+                        <div style="margin-bottom:5px; font-size:0.8rem; color:#aaa;">${art.label}</div>
+                        <img data-blob-key="${idx}" alt="Lazy Loading...">
+                        <div class="lazy-placeholder"><i class="fas fa-spinner fa-spin"></i> Loading...</div>
+                    `;
+                    grid.appendChild(div);
+                    // Observe the IMG element
+                    imageObserver.observe(div.querySelector('img'));
+                });
+
+            } else {
+                // Single View
+                if (artifactHistory.length > 0) renderArtifact(artifactHistory[currentVerIndex]);
+            }
+        }
+
+        function renderArtifact(art) {
+            const vp = document.getElementById('canvas-viewport'); vp.innerHTML = '';
+            
+            // Meta Header
+            const metaHeader = document.createElement('div');
+            metaHeader.className = 'art-meta-header';
+            const traceShort = art.trace_id ? art.trace_id.slice(0,8) : 'N/A';
+            const nodeShort = art.node_id ? art.node_id.slice(-4) : 'N/A';
+            
+            metaHeader.innerHTML = `
+                <div class="art-meta-info">
+                    <span title="Trace ID: ${art.trace_id || 'N/A'}">Trace: ${traceShort}</span>
+                    <span title="Click to jump to log" onclick="jumpToLog('${art.node_id}')">Node: ${nodeShort}</span>
+                </div>
+                <button class="quote-btn" onclick="quoteArtifact('${art.type}', '${art.label}', '${art.node_id}')">
+                    <i class="fas fa-quote-right"></i> Quote
+                </button>
+            `;
+            vp.appendChild(metaHeader);
+
+            if (art.type === 'code') {
+                const div = document.createElement('div'); div.className = 'code-container';
+                div.style.borderTop = 'none'; 
+                div.innerHTML = `<pre><code class="language-python">${escapeHtml(art.content)}</code></pre>`;
+                vp.appendChild(div); Prism.highlightAllUnder(div);
+            } else if (art.type === 'image') {
+                // Single view also uses lazy load logic for consistency/memory
+                const div = document.createElement('div'); div.className = 'image-card';
+                div.style.borderTop = 'none';
+                div.innerHTML = `<img data-blob-key="${currentVerIndex}">`;
+                vp.appendChild(div);
+                loadImageFromBlob(div.querySelector('img'), currentVerIndex);
+            } else if (art.type === 'report') {
+                const div = document.createElement('div'); div.className = 'report-view';
+                div.innerHTML = marked.parse(art.content); vp.appendChild(div);
+            }
+        }
+
+        // --- Standard UI Functions ---
+        function updateVersionUI() {
+            const btnPrev = document.getElementById('btn-prev'); const btnNext = document.getElementById('btn-next'); const label = document.getElementById('ver-label');
+            if (artifactHistory.length === 0) { label.innerText = "EMPTY"; btnPrev.disabled = true; btnNext.disabled = true; return; }
+            const current = artifactHistory[currentVerIndex];
+            label.innerText = `${current.label} (${currentVerIndex + 1}/${artifactHistory.length})`;
+            btnPrev.disabled = currentVerIndex <= 0; btnNext.disabled = currentVerIndex >= artifactHistory.length - 1;
+        }
+
+        function navVersion(delta) {
+            const newIndex = currentVerIndex + delta;
+            if (newIndex >= 0 && newIndex < artifactHistory.length) {
+                currentVerIndex = newIndex; 
+                if (currentViewMode === 'single') renderArtifact(artifactHistory[currentVerIndex]);
+                updateVersionUI();
+            }
+        }
+
+        function quoteArtifact(type, label, nodeId) {
+            const input = document.getElementById('input-task');
+            const ref = `[REF: ${type.toUpperCase()} ${label} (Node: ${nodeId.slice(-4)})] `;
+            input.value = ref + input.value; input.focus();
+        }
+
+        function jumpToLog(nodeId) {
+            const logEl = document.getElementById(`log-node-${nodeId}`);
+            if (logEl) { logEl.scrollIntoView({ behavior: 'smooth', block: 'center' }); logEl.classList.add('highlight'); setTimeout(() => logEl.classList.remove('highlight'), 2000); }
+        }
+
+        function setPhase(phase) {
+            phaseBadge.innerText = phase;
+            document.querySelectorAll('.proto-segment').forEach(el => el.classList.remove('active'));
+            if (phase === 'INITIAL_PLAN') document.getElementById('p-plan').classList.add('active');
+            else if (phase === 'SUB_TASK_EXECUTION') document.getElementById('p-exec').classList.add('active');
+            else if (phase === 'REGRESSION_SUMMARY') document.getElementById('p-summ').classList.add('active');
+        }
+
+        function renderBreadcrumbs(path) {
+            breadcrumbBar.innerHTML = '';
+            path.forEach((node, index) => {
+                const span = document.createElement('span'); span.className = 'crumb-item';
+                span.innerText = node.label; breadcrumbBar.appendChild(span);
+                if (index < path.length - 1) { const sep = document.createElement('span'); sep.className='crumb-sep'; sep.innerText='>'; breadcrumbBar.appendChild(sep); }
+            });
+        }
+
+        function appendLog(type, text, nodeId=null) {
+            const div = document.createElement('div'); div.className = `log-entry type-${type}`;
+            if (nodeId) div.id = `log-node-${nodeId}`;
             const time = new Date().toLocaleTimeString().split(' ')[0];
-            div.innerHTML = `<span class="log-time">[${time}]</span> ${text}`;
-            
-            logContainer.appendChild(div);
-            logContainer.scrollTop = logContainer.scrollHeight;
+            div.innerHTML = `<span class="log-time">${time}</span> ${text}`;
+            logContainer.appendChild(div); logContainer.scrollTop = logContainer.scrollHeight;
         }
+
+        function escapeHtml(text) { return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;"); }
+
+        const resizer = document.getElementById('resizer'); const leftPanel = document.getElementById('left-panel'); const mainLayout = document.getElementById('main-layout');
+        let isResizing = false;
+        resizer.addEventListener('mousedown', () => { isResizing = true; document.body.style.cursor = 'col-resize'; });
+        document.addEventListener('mousemove', (e) => { if (!isResizing) return; leftPanel.style.flex = `0 0 ${(e.clientX / mainLayout.offsetWidth) * 100}%`; });
+        document.addEventListener('mouseup', () => { isResizing = false; document.body.style.cursor = 'default'; });
     </script>
 </body>
 </html>
