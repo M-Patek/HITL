@@ -1,9 +1,9 @@
-from typing import List, Dict
+from typing import List, Dict, Any, Optional
 from agents.common_types import BaseAgentState
 
 class CodingCrewState(BaseAgentState):
     """
-    Coding Crew 内部专用状态 (Visual Enhanced).
+    Coding Crew 内部专用状态 (Visual Enhanced + Reflection).
     """
     current_instruction: str    
     generated_code: str         
@@ -17,5 +17,11 @@ class CodingCrewState(BaseAgentState):
     execution_stderr: str       
     execution_passed: bool      
     
-    # [New] 图片产物 [{"filename": "plot.png", "data": "base64...", "mime": "image/png"}]
+    # [Visual Loop] 图片产物
     image_artifacts: List[Dict[str, str]]
+    
+    # [Protocol Phase 1] 结构化审查报告
+    review_report: Optional[Dict[str, Any]] = None
+    
+    # [Protocol Phase 2] 反思与自愈报告
+    reflection_analysis: Optional[str] = None
