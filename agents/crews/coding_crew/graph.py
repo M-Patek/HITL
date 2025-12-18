@@ -9,11 +9,11 @@ def route_review(state: CodingCrewState) -> str:
     count = state.get("iteration_count", 0)
     
     if status == "approve":
-        print("✅ [Coding Crew] 代码通过审查。")
-        return "end"
-    elif count >= 5: # 最大重试次数
-        print("⚠️ [Coding Crew] 达到最大迭代限制，强制提交。")
-        return "end"
+        print("✅ [Coding Crew] 代码通过审查，进入总结阶段。")
+        return "summarize" # 跳转到 Summarizer
+    elif count >= 5: 
+        print("⚠️ [Coding Crew] 达到最大迭代限制，强制总结。")
+        return "summarize"
     else:
         return "retry"
 
@@ -23,13 +23,13 @@ def build_coding_crew_graph(rotator: GeminiKeyRotator) -> StateGraph:
     
     # 定义节点
     workflow.add_node("coder", nodes.coder_node)
-    workflow.add_node("executor", nodes.executor_node) # [New] 执行节点
+    workflow.add_node("executor", nodes.executor_node)
     workflow.add_node("reviewer", nodes.reviewer_node)
+    workflow.add_node("summarizer", nodes.summarizer_node) # [New]
     
     # 定义流程
     workflow.set_entry_point("coder")
     
-    # 流程变更为: Coder -> Executor -> Reviewer
     workflow.add_edge("coder", "executor")
     workflow.add_edge("executor", "reviewer")
     
@@ -38,8 +38,11 @@ def build_coding_crew_graph(rotator: GeminiKeyRotator) -> StateGraph:
         route_review,
         {
             "retry": "coder",
-            "end": END
+            "summarize": "summarizer"
         }
     )
+    
+    # 总结完就结束
+    workflow.add_edge("summarizer", END)
     
     return workflow.compile()
