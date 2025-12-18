@@ -1,5 +1,6 @@
 import os
-from typing import Dict, Any
+import asyncio
+from typing import Dict, Any, List
 from langgraph.graph import StateGraph, END
 from core.rotator import GeminiKeyRotator
 from tools.memory import VectorMemoryTool
@@ -8,51 +9,38 @@ from core.models import TaskStatus, ProjectState
 from agents.agents import ResearcherAgent, AgentGraphState
 from agents.orchestrator.orchestrator import OrchestratorAgent
 from agents.crews.coding_crew.graph import build_coding_crew_graph
-from agents.crews.data_crew.graph import build_data_crew_graph
-from agents.crews.content_crew.graph import build_content_crew_graph
+from agents.crews.coding_crew.nodes import _sandbox as coding_sandbox
 
 def load_prompt_file(path: str) -> str:
     if os.path.exists(path):
         with open(path, 'r', encoding='utf-8') as f: return f.read().strip()
     return ""
 
-# --- Mappers (Adapters for TaskTree) ---
-
 def common_input_mapper(state: AgentGraphState) -> Dict[str, Any]:
-    """
-    将主图的 TaskNode 状态映射到子图所需的扁平状态
-    """
     project = state["project_state"]
     active_node = project.get_active_node()
-    
-    if not active_node:
-        return {} # Should not happen
-        
+    if not active_node: return {}
     return {
         "task_id": project.task_id,
-        "user_input": project.root_node.instruction, # 全局目标
-        "full_chat_history": active_node.local_history, # 子图只看当前节点的局部历史
-        "current_instruction": active_node.instruction, # 当前节点的具体指令
+        "user_input": project.root_node.instruction,
+        "full_chat_history": active_node.local_history,
+        "current_instruction": active_node.instruction,
         "iteration_count": 0,
         "review_status": "pending",
         "image_artifacts": [] 
     }
-
-# --- Router ---
 
 def route_next_step(state: AgentGraphState) -> str:
     project = state["project_state"]
     decision = project.router_decision
     
     if decision == "finish": return "end"
-    if decision == "human": return "orchestrator" # Re-plan after human input
-    if decision == "tool": return "orchestrator" # Re-plan after tool (ReAct Loop)
+    if decision == "human": return "orchestrator" 
+    if decision == "tool": return "orchestrator" 
     
-    # 这里处理 ReAct 的 Delegate Action
     next_step = project.next_step
     if not next_step: return "orchestrator"
     
-    # 如果是 Delegate 操作，Orchestrator 会设置 agent_name
     agent_name = next_step.get("agent_name", "").lower()
     valid_routes = ["researcher", "coding_crew", "data_crew", "content_crew"]
     
@@ -60,8 +48,6 @@ def route_next_step(state: AgentGraphState) -> str:
         return agent_name
         
     return "orchestrator"
-
-# --- Workflow Builder ---
 
 def build_agent_workflow(
     rotator: GeminiKeyRotator, 
@@ -77,51 +63,76 @@ def build_agent_workflow(
     researcher = ResearcherAgent(rotator, memory_tool, search_tool, res_prompt)
     
     coding_app = build_coding_crew_graph(rotator)
-    # data_app = ... (Assuming similar updates will be done for data_crew)
-    # content_app = ...
     
-    workflow = StateGraph(AgentGraphState)
-    
+    # --- Orchestrator Wrapper ---
+    async def orchestrator_node(state: AgentGraphState):
+        result = orchestrator.run(state)
+        project_state = result["project_state"]
+        
+        # [Speculative] Trigger Side Effects
+        next_step = project_state.next_step
+        if next_step:
+            agent_name = next_step.get("agent_name")
+            spec_queries = next_step.get("speculative_queries")
+            
+            if agent_name == "coding_crew":
+                print("🔥 [Workflow] Predicting Coding Task: Triggering Sandbox Warm-up...")
+                asyncio.create_task(async_warmup_sandbox())
+
+            if spec_queries:
+                print(f"⚡️ [Workflow] Speculative Search triggered for: {spec_queries}")
+                for q in spec_queries:
+                    asyncio.create_task(async_prefetch_search(q, search_tool, project_state))
+        
+        return result
+
+    async def async_warmup_sandbox():
+        try:
+            coding_sandbox.warm_up()
+        except Exception as e:
+            print(f"Warmup failed: {e}")
+
+    async def async_prefetch_search(query: str, tool: GoogleSearchTool, ps: ProjectState):
+        try:
+            res = await tool.search(query)
+            if res:
+                ps.prefetch_cache[query] = res
+        except Exception as e:
+            print(f"   ❌ [Prefetch] Failed for '{query}': {e}")
+
     # --- Nodes ---
+    workflow.add_node("orchestrator", orchestrator_node)
+    workflow.add_node("researcher", researcher.run) 
     
-    workflow.add_node("orchestrator", orchestrator.run)
-    workflow.add_node("researcher", researcher.run) # Researcher 需要同步更新以适配 TaskNode
-    
-    # Wrapper for Coding Crew (With RAPTOR Logic)
     async def call_coding(state: AgentGraphState):
         print(f"🔄 [Subtree] Entering Coding Crew...")
-        # 1. Invoke Subgraph
         res = await coding_app.ainvoke(common_input_mapper(state))
-        
-        # 2. Extract Results
         project = state["project_state"]
         active_node = project.get_active_node()
-        
         code = res.get("generated_code", "")
         images = res.get("image_artifacts", [])
         summary = res.get("final_output", "No summary.")
         
-        # 3. Update State (Artifacts)
-        if code:
-            project.code_blocks["coding_crew"] = code
-        if images:
-            project.artifacts["images"] = images
-            
-        # 4. [RAPTOR Trigger] Update TaskNode Summary
+        if code: project.code_blocks["coding_crew"] = code
+        if images: project.artifacts["images"] = images
+        
         if active_node:
-            print(f"🔼 [RAPTOR] Updating Node Summary: {summary[:50]}...")
+            print(f"🔽 [RAPTOR] Subtree Completed. Pruning Level 0 History...")
+            
+            # 1. Update High-Level Summary
             active_node.semantic_summary = summary
             active_node.status = TaskStatus.COMPLETED
             
-            # 将总结作为一条 System Message 存入局部历史
-            active_node.local_history.append({
+            # 2. [RAPTOR Compression] 
+            # 暴力剪枝：清空局部历史，仅保留一条 System Message 作为“墓碑”
+            # 这确保了当 Orchestrator 回看这个节点时，只消耗极少的 Token
+            active_node.local_history = [{
                 "role": "system", 
-                "parts": [{"text": f"Subtree Execution Completed. Summary: {summary}"}]
-            })
+                "parts": [{"text": f"✅ [ARCHIVED] Subtree execution pruned. Final Summary: {summary}"}]
+            }]
             
         return {"project_state": project}
 
-    # Placeholder wrappers for other crews (Needs similar RAPTOR logic later)
     async def call_data(state: AgentGraphState):
         return {"project_state": state["project_state"]} 
     async def call_content(state: AgentGraphState):
@@ -132,9 +143,7 @@ def build_agent_workflow(
     workflow.add_node("content_crew", call_content)
     
     # --- Edges ---
-    
     workflow.set_entry_point("orchestrator")
-    
     workflow.add_conditional_edges(
         "orchestrator", 
         route_next_step, 
@@ -143,12 +152,10 @@ def build_agent_workflow(
             "coding_crew": "coding_crew",
             "data_crew": "data_crew",
             "content_crew": "content_crew",
-            "orchestrator": "orchestrator", # Loop back for tools
+            "orchestrator": "orchestrator",
             "end": END
         }
     )
-    
-    # All agents return to Orchestrator to update the Tree state
     for node in ["researcher", "coding_crew", "data_crew", "content_crew"]:
         workflow.add_edge(node, "orchestrator")
     
