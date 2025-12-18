@@ -41,6 +41,9 @@ class DataCrewNodes:
         }
 
     def analyst_node(self, state: DataCrewState) -> Dict[str, Any]:
+        """
+        [SWARM 2.0] 带 Auto-Fix 机制的分析师节点
+        """
         print(f"💼 [Business Analyst] 正在评估商业价值...")
         
         prompt_template = load_prompt(self.base_prompt_path, "analyst.md")
@@ -50,12 +53,22 @@ class DataCrewNodes:
         status = "reject"
         feedback = "Validation failed"
         
+        # [Auto-Fix] 错误上下文
+        validation_error_context = ""
+        
         for attempt in range(max_retries):
-            formatted_prompt = prompt_template.format(report=report_to_review)
+            # 动态构建 Prompt
+            base_prompt = prompt_template.format(report=report_to_review)
+            
+            # 如果之前有解析错误，将错误信息附加到 Prompt 末尾
+            if validation_error_context:
+                final_prompt_text = f"{base_prompt}\n\n⚠️ PREVIOUS SYSTEM ERROR (PLEASE FIX JSON FORMAT):\n{validation_error_context}"
+            else:
+                final_prompt_text = base_prompt
 
             response = self.rotator.call_gemini_with_rotation(
                 model_name=GEMINI_MODEL_NAME,
-                contents=[{"role": "user", "parts": [{"text": formatted_prompt}]}],
+                contents=[{"role": "user", "parts": [{"text": final_prompt_text}]}],
                 system_instruction="你是一个严苛的商业分析师。只输出 JSON。",
                 response_schema=AnalystDecision 
             )
@@ -64,13 +77,17 @@ class DataCrewNodes:
                 if not response: raise ValueError("Empty response")
                 cleaned = response.replace("```json", "").replace("```", "").strip()
                 decision = AnalystDecision.model_validate_json(cleaned)
+                
                 status = decision.status.lower()
                 feedback = decision.feedback
                 print(f"   📋 评估结果: {status.upper()} | 意见: {feedback[:50]}...")
-                break
+                break # 成功解析，跳出循环
 
             except (ValidationError, json.JSONDecodeError, ValueError) as e:
-                print(f"   ⚠️ [JSON Validation] 格式校验失败: {e} (Retrying {attempt+1}/{max_retries})...")
+                error_msg = str(e)
+                print(f"   ⚠️ [Auto-Fix] JSON 格式校验失败: {error_msg} (Retrying {attempt+1}/{max_retries})...")
+                # 更新错误上下文，以便下一次请求告诉 LLM 改错
+                validation_error_context = f"Error: {error_msg}\nLast Output: {response}"
                 continue
 
         return {
