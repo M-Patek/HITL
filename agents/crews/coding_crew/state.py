@@ -1,13 +1,21 @@
-from typing import Literal
+from typing import List, Dict
 from agents.common_types import BaseAgentState
 
 class CodingCrewState(BaseAgentState):
     """
-    Coding Crew 内部专用状态。
+    Coding Crew 内部专用状态 (Visual Enhanced).
     """
-    current_instruction: str    # 当前指令
-    generated_code: str         # Coder 生成的代码
-    review_feedback: str        # Reviewer 的反馈
-    review_status: str          # "approve" | "reject" | "pending"
-    iteration_count: int        # 循环计数
-    final_output: str           # 最终确认的代码
+    current_instruction: str    
+    generated_code: str         
+    review_feedback: str        
+    review_status: str          
+    iteration_count: int        
+    final_output: str           
+
+    # Sandbox Outputs
+    execution_stdout: str       
+    execution_stderr: str       
+    execution_passed: bool      
+    
+    # [New] 图片产物 [{"filename": "plot.png", "data": "base64...", "mime": "image/png"}]
+    image_artifacts: List[Dict[str, str]]
