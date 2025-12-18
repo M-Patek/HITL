@@ -1,22 +1,23 @@
-from typing import Dict, Any, List
+from typing import List
+from core.protocol import ToolDefinition
 
 class ToolRegistry:
     """
     [Phase 1] Tool Metadata Registry
-    为 Orchestrator 提供标准化的工具描述 (JSON Schema)。
+    集中管理所有工具的 JSON Schema 定义。
     """
     
     @staticmethod
-    def get_google_search_schema() -> Dict[str, Any]:
+    def get_google_search_schema() -> ToolDefinition:
         return {
             "name": "google_search",
-            "description": "Search the internet for real-time information, technical docs, or facts.",
+            "description": "联网搜索工具。用于获取实时信息、技术文档、新闻或事实核查。",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "query": {
                         "type": "string",
-                        "description": "The search query string."
+                        "description": "搜索关键词。应精简且具体，支持中英文。"
                     }
                 },
                 "required": ["query"]
@@ -24,16 +25,16 @@ class ToolRegistry:
         }
 
     @staticmethod
-    def get_sandbox_schema() -> Dict[str, Any]:
+    def get_sandbox_schema() -> ToolDefinition:
         return {
             "name": "python_sandbox",
-            "description": "Execute Python code in a secure Docker container. Use this for calculation, data plotting, or algorithms.",
+            "description": "Python 代码沙箱。用于执行计算、数据分析、绘图或运行算法。支持 pandas, matplotlib, numpy 等库。",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "code": {
                         "type": "string",
-                        "description": "Complete, executable Python code script."
+                        "description": "完整的、可执行的 Python 代码字符串。代码应包含必要的 import 语句。"
                     }
                 },
                 "required": ["code"]
@@ -41,21 +42,21 @@ class ToolRegistry:
         }
     
     @staticmethod
-    def get_memory_schema() -> Dict[str, Any]:
+    def get_memory_schema() -> ToolDefinition:
         return {
             "name": "vector_memory",
-            "description": "Store or retrieve information from long-term vector database (RAG).",
+            "description": "长期记忆库 (RAG)。用于存储重要的知识片段或检索之前的项目经验。",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "action": {
                         "type": "string",
-                        "enum": ["store", "retrieve"],
-                        "description": "Whether to save new info or query existing info."
+                        "description": "操作类型：'store' (存储) 或 'retrieve' (检索)。",
+                        "enum": ["store", "retrieve"]
                     },
                     "content": {
                         "type": "string",
-                        "description": "The text content to store or the query string to retrieve."
+                        "description": "要存储的文本内容，或者用于检索的查询语句。"
                     }
                 },
                 "required": ["action", "content"]
@@ -63,19 +64,10 @@ class ToolRegistry:
         }
 
     @classmethod
-    def get_all_tool_schemas(cls) -> List[Dict[str, Any]]:
-        """获取所有可用工具的 Schema 列表，供 LLM 绑定"""
+    def get_all_tool_schemas(cls) -> List[ToolDefinition]:
+        """获取所有可用工具的 Schema 列表，供 LLM Function Calling 使用"""
         return [
             cls.get_google_search_schema(),
             cls.get_sandbox_schema(),
             cls.get_memory_schema()
         ]
-
-    @staticmethod
-    def get_tool_description_str() -> str:
-        """为不支持 Function Calling 的纯 Prompt 模式提供文本描述"""
-        return """
-        1. google_search(query: str): Search internet for info.
-        2. python_sandbox(code: str): Run Python code to calc/plot.
-        3. vector_memory(action: 'store'|'retrieve', content: str): Access long-term memory.
-        """
