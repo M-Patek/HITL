@@ -6,8 +6,10 @@ from contextvars import ContextVar
 from typing import Optional
 
 # [核心黑科技] ContextVar
-# 它的作用范围是 "当前 Async Task"，完美适配 FastAPI 和 httpx
+# trace_id: 贯穿整个 HTTP 请求或任务生命周期
+# node_id: 贯穿当前 TaskNode 的执行周期
 trace_id_ctx: ContextVar[Optional[str]] = ContextVar("trace_id", default=None)
+node_id_ctx: ContextVar[Optional[str]] = ContextVar("node_id", default=None)
 
 class JSONFormatter(logging.Formatter):
     """
@@ -27,10 +29,14 @@ class JSONFormatter(logging.Formatter):
             "line": record.lineno,
         }
         
-        # [自动注入] 从上下文获取 Trace ID
+        # [自动注入] 从上下文获取 Trace ID 和 Node ID
         tid = trace_id_ctx.get()
         if tid:
             log_object["trace_id"] = tid
+            
+        nid = node_id_ctx.get()
+        if nid:
+            log_object["node_id"] = nid
 
         # 支持 extra={"extra_data": {...}}
         if hasattr(record, "extra_data"):
