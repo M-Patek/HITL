@@ -4,7 +4,7 @@
 [![LangGraph](https://img.shields.io/badge/Framework-LangGraph-orange?style=flat-square)](https://langchain-ai.github.io/langgraph/)
 [![FastAPI](https://img.shields.io/badge/API-FastAPI-green?style=flat-square)](https://fastapi.tiangolo.com/)
 
-> 本项目是**人机协同（Human-in-the-Loop）**智能体系统，集成了 Docker 沙箱代码执行、联网搜索、语义缓存以及基于状态机的自我修正机制。
+> 本项目定位于**人机协同（Human-in-the-Loop）**智能体系统，集成了 Docker 沙箱代码执行、联网搜索、语义缓存以及基于状态机的自我修正机制。
 
 ## 📖 项目简介
 
