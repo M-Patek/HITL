@@ -106,7 +106,7 @@ python api_server.py
 
 | 组件 | 技术选型 | 用途 |
 | :--- | :--- | :--- |
-| **LLM** | Gemini 1.5 Pro / Flash | 核心推理引擎 |
+| **LLM** | Gemini 2.5 Pro / Flash | 核心推理引擎 |
 | **Orchestration** | LangGraph | 状态机管理与 HITL 中断 |
 | **Backend** | FastAPI + SSE | 异步流式输出接口 |
 | **Sandbox** | Docker | 安全的代码执行环境 |
