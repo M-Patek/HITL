@@ -71,6 +71,7 @@ class SigHAManager:
         try:
             prev_t = int(current_t_str)
         except (ValueError, TypeError):
+            # Fallback for genesis
             prev_t = int(hashlib.sha256(b"GENESIS_SEED").hexdigest(), 16)
 
         p_agent = self.hash_to_prime(agent_id)
@@ -86,10 +87,13 @@ class SigHAManager:
 
     def update_trace_in_state(self, state_obj: Any, agent_name: str) -> None:
         """
-        统一处理 Dict 或 Pydantic 模型的签名更新
+        统一处理 Dict 或 Pydantic 模型的签名更新。
+        state_obj 可能是 Pydantic Model (ProjectState) 也可能是 TypedDict (CodingCrewState)。
         """
-        is_pydantic = hasattr(state_obj, 'trace_t')
+        # 判断是否为 Pydantic 对象
+        is_pydantic = hasattr(state_obj, 'model_dump') or (hasattr(state_obj, 'trace_t') and not isinstance(state_obj, dict))
         
+        # 提取当前状态
         if is_pydantic:
             current_t = getattr(state_obj, 'trace_t', "0")
             current_depth = getattr(state_obj, 'trace_depth', 0)
@@ -101,6 +105,7 @@ class SigHAManager:
         
         if history is None: history = []
 
+        # 计算新签名
         new_t, new_depth = self.evolve_state(current_t, agent_name, current_depth)
         
         entry = {
@@ -109,8 +114,10 @@ class SigHAManager:
             "t_fingerprint": new_t[:16] + "...",
             "timestamp": time.time()
         }
-        new_history = history + [entry]
+        # Copy history to avoid reference issues
+        new_history = list(history) + [entry]
 
+        # 写回状态
         if is_pydantic:
             setattr(state_obj, 'trace_t', new_t)
             setattr(state_obj, 'trace_depth', new_depth)
