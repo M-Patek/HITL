@@ -6,6 +6,7 @@ from typing import Tuple, List, Dict, Any
 # -------------------------------------------------------------------------
 # SIG-HA: Holographic Accumulator for Distributed Topology Steganography
 # Pure Python Implementation adapted for HITL
+# Independent Module: No internal project dependencies to prevent cycles.
 # -------------------------------------------------------------------------
 
 # RFC 3526 - 2048-bit MODP Group (Safe Prime)
@@ -24,14 +25,16 @@ class SigHAManager:
     """
     SIG-HA 全息溯源管理器 (Pure Python Version)
     负责管理 Agent 身份映射、状态演化和全息指纹计算。
+    此模块设计为零依赖，可被任何层级调用。
     """
     
     def __init__(self):
         self.M = int(RFC_3526_PRIME_2048_HEX, 16)
         self.G = 4  # Generator
-        self._prime_cache = {}
+        self._prime_cache: Dict[str, int] = {}
 
     def _is_prime_miller_rabin(self, n: int, k: int = 10) -> bool:
+        """Miller-Rabin 素数检测算法"""
         if n == 2 or n == 3: return True
         if n % 2 == 0: return False
 
@@ -54,6 +57,7 @@ class SigHAManager:
         return True
 
     def hash_to_prime(self, agent_id: str) -> int:
+        """将 Agent ID 确定性地映射到一个素数"""
         if agent_id in self._prime_cache:
             return self._prime_cache[agent_id]
 
@@ -68,15 +72,18 @@ class SigHAManager:
             candidate += 2
 
     def evolve_state(self, current_t_str: str, agent_id: str, current_depth: int) -> Tuple[str, int]:
+        """
+        计算下一个状态指纹
+        T_next = (T_prev ^ P_agent * G ^ H(depth)) mod M
+        """
         try:
             prev_t = int(current_t_str)
         except (ValueError, TypeError):
-            # Fallback for genesis
+            # Fallback for genesis or malformed state
             prev_t = int(hashlib.sha256(b"GENESIS_SEED").hexdigest(), 16)
 
         p_agent = self.hash_to_prime(agent_id)
         
-        # T_next = (T_prev ^ P_agent * G ^ H(depth)) mod M
         term1 = pow(prev_t, p_agent, self.M)
         h_depth = int(hashlib.sha256(str(current_depth).encode()).hexdigest(), 16)
         term2 = pow(self.G, h_depth, self.M)
@@ -88,36 +95,46 @@ class SigHAManager:
     def update_trace_in_state(self, state_obj: Any, agent_name: str) -> None:
         """
         统一处理 Dict 或 Pydantic 模型的签名更新。
-        state_obj 可能是 Pydantic Model (ProjectState) 也可能是 TypedDict (CodingCrewState)。
-        """
-        # 判断是否为 Pydantic 对象
-        is_pydantic = hasattr(state_obj, 'model_dump') or (hasattr(state_obj, 'trace_t') and not isinstance(state_obj, dict))
+        通过反射机制解耦对具体 Model 类的依赖。
         
-        # 提取当前状态
+        Args:
+            state_obj: ProjectState 对象 (Pydantic) 或 TypedDict (Dict)
+            agent_name: 当前执行操作的 Agent 名称
+        """
+        # 动态判断是否为 Pydantic 对象 (兼容 v1/v2)
+        # 只要不是 dict 且具有 trace_t 属性，或具有 model_dump 方法，就视为对象操作
+        is_pydantic = (not isinstance(state_obj, dict)) and (
+            hasattr(state_obj, 'model_dump') or hasattr(state_obj, 'trace_t')
+        )
+        
+        # 1. 提取当前状态
         if is_pydantic:
             current_t = getattr(state_obj, 'trace_t', "0")
             current_depth = getattr(state_obj, 'trace_depth', 0)
+            # Pydantic 可能会返回 None，需要防御性处理
             history = getattr(state_obj, 'trace_history', [])
         else:
             current_t = state_obj.get('trace_t', "0")
             current_depth = state_obj.get('trace_depth', 0)
             history = state_obj.get('trace_history', [])
         
-        if history is None: history = []
+        if history is None: 
+            history = []
 
-        # 计算新签名
+        # 2. 计算新签名
         new_t, new_depth = self.evolve_state(current_t, agent_name, current_depth)
         
         entry = {
             "depth": new_depth,
             "agent": agent_name,
-            "t_fingerprint": new_t[:16] + "...",
+            "t_fingerprint": new_t[:16] + "...", # 只存储前缀以便于阅读
             "timestamp": time.time()
         }
-        # Copy history to avoid reference issues
+        
+        # 3. 更新历史 (Copy to avoid mutation issues in some frameworks)
         new_history = list(history) + [entry]
 
-        # 写回状态
+        # 4. 写回状态
         if is_pydantic:
             setattr(state_obj, 'trace_t', new_t)
             setattr(state_obj, 'trace_depth', new_depth)
@@ -127,4 +144,5 @@ class SigHAManager:
             state_obj['trace_depth'] = new_depth
             state_obj['trace_history'] = new_history
 
+# 全局单例
 sig_ha = SigHAManager()
