@@ -45,6 +45,7 @@ class ToolCallRecord(BaseModel):
 class ArtifactVersion(BaseModel):
     """
     [Phase 3 New] 产物版本控制对象
+    [Phase 1 Upgrade] 增加 Vector Clock 支持并行溯源
     """
     version_id: str = Field(default_factory=lambda: str(uuid.uuid4())[:8])
     timestamp: str = Field(default_factory=lambda: datetime.now().isoformat())
@@ -53,6 +54,9 @@ class ArtifactVersion(BaseModel):
     trace_id: Optional[str] = None 
     node_id: str
     
+    # [Phase 1 New] 向量时钟快照，用于并行分支溯源
+    vector_clock: Dict[str, int] = Field(default_factory=dict)
+
     type: Literal["code", "image", "report"]
     content: Any # Code string or Image data dict
     label: str = "v1"
@@ -89,6 +93,12 @@ class ProjectState(BaseModel):
     active_node_id: str
     node_map: Dict[str, TaskNode] = Field(default_factory=dict)
     
+    # [Phase 1 New] 拓扑与并发控制
+    # 记录节点间的动态跳转路径 (Source Node ID -> List[Target Node IDs])
+    execution_graph: Dict[str, List[str]] = Field(default_factory=dict)
+    # 向量时钟，追踪各并行分支进度 (e.g., {'main': 5, 'coding_crew': 2, 'researcher': 3})
+    vector_clock: Dict[str, int] = Field(default_factory=lambda: {"main": 0})
+    
     # Global Context
     artifacts: Dict[str, Any] = {}
     code_blocks: Dict[str, str] = {}
@@ -124,6 +134,7 @@ class ProjectState(BaseModel):
             root_node=root,
             active_node_id=root.node_id,
             node_map={root.node_id: root},
+            execution_graph={}, # Init empty graph
             image_data=image_data
         )
         return instance
@@ -136,6 +147,11 @@ class ProjectState(BaseModel):
         if parent:
             parent.add_child(child_node)
             self.node_map[child_node.node_id] = child_node
+            
+            # [Phase 1 New] 同时更新图结构
+            if parent_id not in self.execution_graph:
+                self.execution_graph[parent_id] = []
+            self.execution_graph[parent_id].append(child_node.node_id)
         else:
             raise ValueError(f"Parent node {parent_id} not found")
 
