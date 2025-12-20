@@ -1,441 +1,306 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Gemini Agent Swarm - Studio Pro</title>
+    <title>Gemini Swarm - Ultimate Commander</title>
+    
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
     <link href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css" rel="stylesheet" />
     <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-python.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/9.1.2/marked.min.js"></script>
-    
+
     <style>
+        /* --- 移植自“迭代前”的深色主题变量  --- */
         :root {
             --bg-color: #1e1e1e;
             --panel-bg: #252526;
             --border-color: #333;
-            --accent: #4caf50;
-            --purple: #9c27b0;
-            --warn: #ff9800;
-            --text: #ccc;
+            --accent: #4caf50; /* 绿色点缀 */
+            --highlight: #3b82f6; /* 蓝色选中 */
+            --text-main: #ccc;
+            --text-muted: #888;
         }
 
         body {
-            font-family: 'Segoe UI', monospace, sans-serif;
             background-color: var(--bg-color);
-            color: var(--text);
-            margin: 0; height: 100vh;
-            display: flex; flex-direction: column; overflow: hidden;
+            color: var(--text-main);
+            font-family: 'Segoe UI', monospace, sans-serif;
+            overflow: hidden; /* 防止全屏滚动 */
         }
 
-        /* --- Header --- */
-        header { background: #2d2d2d; padding: 10px 20px; border-bottom: 1px solid var(--border-color); height: 130px; flex-shrink: 0; box-sizing: border-box; }
-        .top-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
-        h1 { margin: 0; font-size: 1.1rem; color: var(--accent); display: flex; align-items: center; gap: 10px; }
-        .phase-badge { font-size: 0.7rem; padding: 2px 8px; border-radius: 4px; background: #444; color: #fff; text-transform: uppercase; }
+        /* 自定义滚动条 */
+        ::-webkit-scrollbar { width: 8px; height: 8px; }
+        ::-webkit-scrollbar-track { background: var(--bg-color); }
+        ::-webkit-scrollbar-thumb { background: #444; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #555; }
+
+        /* 左侧日志选中态 */
+        .log-item.active {
+            background-color: #37373d;
+            border-left: 3px solid var(--accent);
+        }
+
+        /* 画廊网格 [cite: 84] */
+        .gallery-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 15px;
+        }
         
-        #protocol-status { display: flex; gap: 2px; height: 4px; background: #333; border-radius: 2px; overflow: hidden; margin-bottom: 10px; }
-        .proto-segment { flex: 1; background: #444; transition: 0.3s; }
-        .proto-segment.active { background: var(--accent); box-shadow: 0 0 8px var(--accent); }
-
-        #breadcrumb-bar { 
-            background: #1e1e1e; border: 1px solid #333; padding: 4px 10px; border-radius: 4px; 
-            display: flex; gap: 5px; flex-wrap: wrap; margin-bottom: 10px; height: 20px; align-items: center; font-size: 0.85rem;
+        /* 图片卡片效果 */
+        .artifact-card {
+            background: var(--panel-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            overflow: hidden;
+            transition: transform 0.2s;
         }
-        .crumb-item { color: #aaa; display: flex; align-items: center; }
-        .crumb-sep { color: #555; margin: 0 5px; }
+        .artifact-card:hover { transform: translateY(-2px); box-shadow: 0 4px 12px rgba(0,0,0,0.3); }
 
-        .controls { display: flex; gap: 10px; }
-        input { flex: 1; padding: 8px; background: #333; color: #fff; border: 1px solid #444; border-radius: 4px; }
-        button { padding: 8px 16px; background: var(--accent); border: none; cursor: pointer; border-radius: 4px; color: #fff; font-weight: bold; }
-
-        /* --- Layout --- */
-        #main-layout { display: flex; flex: 1; overflow: hidden; position: relative; }
-        #left-panel { flex: 0 0 35%; background: var(--panel-bg); border-right: 1px solid var(--border-color); display: flex; flex-direction: column; min-width: 300px; }
-        .panel-header { padding: 8px 15px; background: #333; font-size: 0.8rem; font-weight: bold; display: flex; justify-content: space-between; align-items: center; color: #eee; }
+        /* 终端风格文本 */
+        .terminal-text { font-family: 'Consolas', 'Monaco', monospace; }
         
-        #log-container { flex: 1; padding: 15px; overflow-y: auto; font-family: 'Consolas', monospace; font-size: 0.85em; scroll-behavior: smooth; }
-        .log-entry { padding: 5px 0; border-bottom: 1px solid #333; line-height: 1.4; transition: background 0.3s; }
-        .log-entry.highlight { background: rgba(76, 175, 80, 0.2); }
-        .log-time { color: #555; margin-right: 8px; font-size: 0.9em; }
-        .type-protocol_step_start { color: var(--purple); margin: 5px 0; padding-left: 8px; border-left: 2px solid var(--purple); }
-
-        #resizer { width: 5px; cursor: col-resize; background: #2d2d2d; z-index: 10; }
-        #right-panel { flex: 1; background: #1e1e1e; display: flex; flex-direction: column; min-width: 400px; position: relative; }
-
-        /* --- Canvas --- */
-        #canvas-header { display: flex; justify-content: space-between; align-items: center; padding: 8px 15px; background: #252526; border-bottom: 1px solid #333; }
-        
-        /* View Controls */
-        #view-controls { display: flex; gap: 5px; margin-right: 15px; }
-        .view-btn { background: transparent; border: 1px solid #444; color: #888; padding: 2px 6px; border-radius: 3px; cursor: pointer; font-size: 0.75rem; }
-        .view-btn.active { background: #444; color: #fff; border-color: #666; }
-
-        #version-controls { display: flex; align-items: center; gap: 10px; font-size: 0.85rem; }
-        .ver-btn { background: transparent; border: 1px solid #444; color: #aaa; padding: 2px 8px; border-radius: 3px; cursor: pointer; }
-        .ver-btn:disabled { opacity: 0.3; }
-        
-        #canvas-viewport { flex: 1; padding: 20px; overflow-y: auto; position: relative; }
-        
-        /* Artifact Header */
-        .art-meta-header { 
-            display: flex; justify-content: space-between; align-items: center; 
-            background: #222; padding: 5px 10px; border-bottom: 1px solid #444; font-size: 0.8rem; color: #888;
-        }
-        .art-meta-info span { margin-right: 15px; cursor: pointer; }
-        .art-meta-info span:hover { color: var(--accent); text-decoration: underline; }
-        .quote-btn { 
-            background: transparent; border: 1px solid #555; color: #aaa; padding: 2px 8px; border-radius: 3px; cursor: pointer; font-size: 0.75rem;
-        }
-
-        .code-container { border: 1px solid #444; border-radius: 4px; overflow: hidden; margin-bottom: 10px; }
-        
-        /* Image Card (Lazy Load Ready) */
-        .image-card { 
-            text-align: center; background: #252526; padding: 10px; border-radius: 8px; border: 1px solid #444; margin-bottom: 20px;
-            min-height: 200px; display: flex; flex-direction: column; justify-content: center;
-        }
-        .image-card img { 
-            max-width: 100%; box-shadow: 0 5px 15px rgba(0,0,0,0.5); 
-            opacity: 0; transition: opacity 0.5s; 
-        }
-        .image-card img.loaded { opacity: 1; }
-        .lazy-placeholder { color: #555; font-style: italic; }
-
-        /* Gallery Grid */
-        .gallery-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 15px; }
-
-        /* Overlays */
-        #canvas-overlay { 
-            position: absolute; top: 0; left: 0; width: 100%; height: 100%; 
-            background: rgba(0,0,0,0.3); backdrop-filter: blur(4px); 
-            display: flex; justify-content: center; align-items: center; 
-            z-index: 20; opacity: 0; pointer-events: none; transition: opacity 0.3s; 
-        }
-        #canvas-overlay.visible { opacity: 1; pointer-events: all; }
-        .spinner { font-size: 2rem; color: var(--accent); animation: spin 1s linear infinite; }
-        @keyframes spin { 100% { transform: rotate(360deg); } }
-        
-        #hitl-banner { 
-            background: var(--warn); color: #000; padding: 8px; text-align: center; font-weight: bold; font-size: 0.9rem; display: none; 
-        }
+        /* 闪烁光标 */
+        .blink { animation: blinker 1s linear infinite; }
+        @keyframes blinker { 50% { opacity: 0; } }
     </style>
 </head>
-<body>
+<body class="h-screen flex flex-col">
 
-    <header>
-        <div class="top-row">
-            <h1><i class="fas fa-robot"></i> Gemini Swarm <span id="current-phase" class="phase-badge">IDLE</span></h1>
-            <div id="protocol-status">
-                <div id="p-plan" class="proto-segment" title="Plan"></div>
-                <div id="p-exec" class="proto-segment" title="Execute"></div>
-                <div id="p-summ" class="proto-segment" title="Summary"></div>
+    <div id="app" class="flex flex-col h-full">
+        
+        <header class="h-14 bg-[#2d2d2d] border-b border-[#333] flex items-center justify-between px-4 shrink-0">
+            <div class="flex items-center gap-3">
+                <h1 class="text-lg font-bold text-green-500"><i class="fas fa-robot"></i> Gemini Commander</h1>
+                <span class="text-xs bg-[#444] px-2 py-0.5 rounded text-white">{{ currentPhase }}</span>
             </div>
-        </div>
-        <div id="breadcrumb-bar"><span class="crumb-item">System Ready</span></div>
-        <div class="controls">
-            <input type="text" id="input-task" value="Generate a fractal tree in Python" placeholder="Enter task...">
-            <input type="text" id="input-thread" placeholder="Thread ID" style="flex: 0 0 80px;">
-            <button onclick="startTask()"><i class="fas fa-play"></i> Run</button>
-        </div>
-    </header>
+            <div class="flex items-center gap-4 text-xs text-gray-400">
+                <span>Task ID: {{ taskId }}</span>
+                <div class="flex gap-1">
+                    <span class="w-2 h-2 rounded-full bg-green-500" title="Plan"></span>
+                    <span class="w-2 h-2 rounded-full bg-blue-500 animate-pulse" title="Execute"></span>
+                    <span class="w-2 h-2 rounded-full bg-gray-600" title="Summary"></span>
+                </div>
+            </div>
+        </header>
 
-    <div id="main-layout">
-        <aside id="left-panel">
-            <div class="panel-header"><span>LOG STREAM</span></div>
-            <div id="log-container"></div>
-        </aside>
-        <div id="resizer"></div>
-        <main id="right-panel">
-            <div id="hitl-banner"><i class="fas fa-hand-paper"></i> HITL REQUIRED</div>
-            <div class="panel-header" id="canvas-header">
-                <div style="display:flex; align-items:center;">
-                    <span style="margin-right:15px;">CANVAS</span>
-                    <div id="view-controls">
-                        <button class="view-btn active" id="btn-view-single" onclick="switchView('single')"><i class="fas fa-square"></i> Single</button>
-                        <button class="view-btn" id="btn-view-gallery" onclick="switchView('gallery')"><i class="fas fa-th-large"></i> Gallery</button>
+        <div class="flex flex-1 overflow-hidden">
+            
+            <div class="w-1/3 bg-[#252526] border-r border-[#333] flex flex-col min-w-[300px]">
+                <div class="p-3 border-b border-[#333] bg-[#2d2d2d]">
+                    <h2 class="text-sm font-bold text-gray-300"><i class="fas fa-list-ul"></i> 主任务流 (Main Loop)</h2>
+                </div>
+                
+                <div class="flex-1 overflow-y-auto p-2 space-y-2">
+                    <div v-for="(log, index) in mainLogs" 
+                         :key="index" 
+                         @click="log.run_id ? selectRun(log.run_id) : null"
+                         :class="['log-item p-3 rounded cursor-pointer transition-colors text-sm border border-transparent hover:bg-[#333]', 
+                                  currentRunId === log.run_id ? 'active' : '',
+                                  !log.run_id ? 'opacity-70 pointer-events-none' : '']">
+                        
+                        <div class="flex justify-between items-center mb-1">
+                            <span class="font-bold text-blue-400">{{ log.agent }}</span>
+                            <span class="text-[10px] text-gray-500">{{ log.time }}</span>
+                        </div>
+                        <div class="text-gray-300">{{ log.message }}</div>
+                        
+                        <div v-if="log.run_id" class="mt-2 text-[10px] text-green-500 flex items-center gap-1">
+                            <i class="fas fa-microchip"></i> 
+                            <span>包含 {{ getSubLogCount(log.run_id) }} 条子记录 & {{ getArtifactCount(log.run_id) }} 个产出物</span>
+                        </div>
                     </div>
                 </div>
-                <div id="version-controls">
-                    <button class="ver-btn" id="btn-prev" onclick="navVersion(-1)" disabled><i class="fas fa-chevron-left"></i></button>
-                    <span id="ver-label">LATEST</span>
-                    <button class="ver-btn" id="btn-next" onclick="navVersion(1)" disabled><i class="fas fa-chevron-right"></i></button>
+
+                <div class="p-4 border-t border-[#333] bg-[#1e1e1e]">
+                    <label class="text-xs text-yellow-500 font-bold mb-1 block"><i class="fas fa-hand-sparkles"></i> 注入神谕 (HITL)</label>
+                    <div class="flex gap-2">
+                        <input v-model="userInput" 
+                               @keyup.enter="sendIntervention"
+                               placeholder="输入指令干预 Agent..." 
+                               class="w-full bg-[#333] border border-[#444] rounded p-2 text-sm text-white focus:outline-none focus:border-green-500">
+                        <button @click="sendIntervention" class="bg-green-600 hover:bg-green-700 text-white px-3 rounded">
+                            <i class="fas fa-paper-plane"></i>
+                        </button>
+                    </div>
                 </div>
             </div>
-            <div id="canvas-viewport"></div>
-            <div id="canvas-overlay">
-                <div style="text-align:center;">
-                    <i class="fas fa-circle-notch spinner"></i>
-                    <div style="margin-top:10px; color:#fff; font-weight:bold;">Orchestrator is thinking...</div>
+
+            <div class="flex-1 flex flex-col bg-[#1e1e1e]">
+                
+                <div class="h-10 border-b border-[#333] bg-[#252526] flex items-center justify-between px-4">
+                    <h2 class="text-sm text-gray-300">
+                        <i class="fas fa-layer-group"></i> 
+                        子任务详情: <span class="text-green-400 font-mono">{{ currentRunId || '等待选择...' }}</span>
+                    </h2>
+                    
+                    <div class="flex bg-[#333] rounded p-0.5">
+                        <button @click="viewMode = 'terminal'" 
+                                :class="['px-3 py-1 text-xs rounded transition-all', viewMode === 'terminal' ? 'bg-[#444] text-white shadow' : 'text-gray-500 hover:text-gray-300']">
+                            <i class="fas fa-terminal"></i> 终端
+                        </button>
+                        <button @click="viewMode = 'canvas'" 
+                                :class="['px-3 py-1 text-xs rounded transition-all', viewMode === 'canvas' ? 'bg-[#444] text-white shadow' : 'text-gray-500 hover:text-gray-300']">
+                            <i class="fas fa-image"></i> 画布
+                        </button>
+                    </div>
+                </div>
+
+                <div class="flex-1 overflow-hidden relative">
+                    
+                    <div v-if="viewMode === 'terminal'" class="h-full overflow-y-auto p-4 terminal-text">
+                        <div v-if="!currentSubLogs.length" class="h-full flex flex-col items-center justify-center text-gray-600">
+                            <i class="fas fa-arrow-left text-2xl mb-2"></i>
+                            <p>请在左侧选择一个包含 run_id 的任务节点</p>
+                        </div>
+                        
+                        <div v-for="(entry, idx) in currentSubLogs" :key="idx" class="mb-4 pl-4 border-l-2 border-green-800">
+                            <div class="text-xs text-gray-500 mb-1">{{ entry.timestamp }}</div>
+                            
+                            <div v-if="entry.type === 'thought'" class="text-gray-400 italic">Thinking: {{ entry.content }}</div>
+                            <div v-else-if="entry.type === 'info'" class="text-gray-300">{{ entry.content }}</div>
+                            
+                            <div v-else-if="entry.type === 'error'" class="text-red-400 bg-red-900/20 p-2 rounded border border-red-900">
+                                <i class="fas fa-exclamation-triangle"></i> {{ entry.content }}
+                            </div>
+
+                            <div v-else-if="entry.type === 'code'" class="mt-2 text-xs">
+                                <div class="bg-black/50 p-1 text-gray-500 rounded-t border border-[#444] border-b-0">Code Execution</div>
+                                <pre class="bg-[#111] p-2 rounded-b border border-[#444] text-green-300 whitespace-pre-wrap font-mono">{{ entry.content }}</pre>
+                            </div>
+                        </div>
+                        <div v-if="currentRunId" class="pl-4 text-green-500"><span class="blink">_</span></div>
+                    </div>
+
+                    <div v-if="viewMode === 'canvas'" class="h-full overflow-y-auto p-6 bg-[#1a1a1a]">
+                        <div v-if="!currentArtifacts.length" class="h-full flex flex-col items-center justify-center text-gray-600">
+                            <i class="fas fa-crop-alt text-2xl mb-2"></i>
+                            <p>当前节点没有生成可视化的产出物 (Artifacts)</p>
+                        </div>
+
+                        <div class="gallery-grid">
+                            <div v-for="(art, idx) in currentArtifacts" :key="idx" class="artifact-card flex flex-col">
+                                <div class="p-2 border-b border-[#333] flex justify-between items-center bg-[#2d2d2d]">
+                                    <span class="text-xs font-bold text-gray-300">
+                                        <i :class="art.type === 'image' ? 'fas fa-image' : 'fas fa-code'"></i> {{ art.label }}
+                                    </span>
+                                    <button class="text-xs text-gray-500 hover:text-white"><i class="fas fa-download"></i></button>
+                                </div>
+                                
+                                <div class="flex-1 bg-[#1e1e1e] flex items-center justify-center p-2 min-h-[200px]">
+                                    <img v-if="art.type === 'image'" :src="art.content" class="max-w-full max-h-[300px] shadow-lg rounded" alt="Generated">
+                                    
+                                    <div v-else-if="art.type === 'code'" class="w-full h-full text-xs">
+                                        <pre><code class="language-python">{{ art.content }}</code></pre>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
                 </div>
             </div>
-        </main>
+        </div>
     </div>
 
     <script>
-        let artifactHistory = [];
-        let currentVerIndex = -1;
-        let currentViewMode = 'single'; // 'single' | 'gallery'
-        
-        // Lazy Load Observer
-        let imageObserver;
+        const { createApp, ref, computed, nextTick } = Vue;
 
-        const logContainer = document.getElementById('log-container');
-        const phaseBadge = document.getElementById('current-phase');
-        const breadcrumbBar = document.getElementById('breadcrumb-bar');
-        const overlay = document.getElementById('canvas-overlay');
-        const hitlBanner = document.getElementById('hitl-banner');
+        createApp({
+            setup() {
+                // --- 状态数据 ---
+                const taskId = ref('task_phx_001');
+                const currentPhase = ref('EXECUTION');
+                const userInput = ref('');
+                const viewMode = ref('terminal'); // terminal | canvas
+                const currentRunId = ref(null);
 
-        // --- Init Observer ---
-        function initObserver() {
-            if (imageObserver) imageObserver.disconnect();
-            imageObserver = new IntersectionObserver((entries, observer) => {
-                entries.forEach(entry => {
-                    if (entry.isIntersecting) {
-                        const img = entry.target;
-                        const blobKey = img.dataset.blobKey; // Index in history
-                        loadImageFromBlob(img, blobKey);
-                        observer.unobserve(img);
-                    }
-                });
-            }, { root: document.getElementById('canvas-viewport'), rootMargin: '50px' });
-        }
+                // --- 模拟数据: 主日志 (Macro) [cite: 13] ---
+                const mainLogs = ref([
+                    { agent: 'System', message: 'Phoenix Protocol Initialized.', time: '10:00:01', run_id: null },
+                    { agent: 'Planner', message: 'Analyzing market data structure...', time: '10:00:05', run_id: 'run_plan_01' },
+                    { agent: 'Coder', message: 'Generating Python visualization script.', time: '10:00:12', run_id: 'run_code_01' },
+                    { agent: 'Reviewer', message: 'Validating output vs constraints.', time: '10:00:45', run_id: 'run_review_01' }
+                ]);
 
-        async function startTask() {
-            const taskInput = document.getElementById('input-task').value;
-            const threadId = document.getElementById('input-thread').value || `t-${Date.now()}`;
-            logContainer.innerHTML = ''; artifactHistory = []; currentVerIndex = -1; updateVersionUI();
-            setPhase('INITIALIZING'); hitlBanner.style.display = 'none';
-            initObserver();
-            
-            try {
-                const response = await fetch('/stream_task', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ user_input: taskInput, thread_id: threadId })
-                });
-                const reader = response.body.getReader();
-                const decoder = new TextDecoder();
-                let buffer = '';
-                while (true) {
-                    const { done, value } = await reader.read(); if (done) break;
-                    buffer += decoder.decode(value, { stream: true });
-                    const parts = buffer.split('\n\n'); buffer = parts.pop();
-                    parts.forEach(parseSSE);
-                }
-            } catch (e) { appendLog('error', e.message); }
-        }
-
-        function parseSSE(block) {
-            if (!block.trim()) return;
-            const lines = block.split('\n');
-            let type = 'update', data = null;
-            lines.forEach(line => {
-                if (line.startsWith('event: ')) type = line.substring(7);
-                else if (line.startsWith('data: ')) { try { data = JSON.parse(line.substring(6)); } catch { data = line.substring(6); } }
-            });
-            if (data) handleEvent(type, data);
-        }
-
-        function handleEvent(type, data) {
-            if (type === 'update' && data.status === 'tool') overlay.classList.add('visible');
-            else if (type === 'interrupt') { overlay.classList.remove('visible'); hitlBanner.style.display = 'block'; appendLog('interrupt', data.msg); }
-            else overlay.classList.remove('visible');
-
-            if (type === 'protocol_step_start') {
-                setPhase(data.phase);
-                appendLog('info', `Phase: ${data.phase}`, data.node_id);
-            } else if (type === 'tree_update') {
-                renderBreadcrumbs(data);
-            } else if (type === 'artifact_code' || type === 'artifact_image') {
-                
-                // [Optimization] Convert Base64 to Blob immediately
-                if (type === 'artifact_image' && data.content.data) {
-                    const blob = base64ToBlob(data.content.data, data.content.mime_type);
-                    data.content.blob = blob;
-                    data.content.data = null; // Free memory!
-                }
-                
-                artifactHistory.push(data); currentVerIndex = artifactHistory.length - 1;
-                refreshCanvas(); // Smart refresh
-                updateVersionUI();
-                appendLog('artifact', `Generated ${data.type} (${data.label})`, data.node_id);
-                
-            } else if (type === 'final_report') {
-                const reportArt = { type: 'report', content: data, label: 'FINAL', node_id: 'report' };
-                artifactHistory.push(reportArt); currentVerIndex = artifactHistory.length - 1;
-                refreshCanvas(); updateVersionUI(); setPhase('COMPLETED');
-            } else { if (type !== 'update') appendLog(type, typeof data === 'string' ? data : JSON.stringify(data)); }
-        }
-
-        // --- Memory Optimization ---
-        function base64ToBlob(b64Data, contentType) {
-            const byteCharacters = atob(b64Data);
-            const byteArrays = [];
-            for (let offset = 0; offset < byteCharacters.length; offset += 512) {
-                const slice = byteCharacters.slice(offset, offset + 512);
-                const byteNumbers = new Array(slice.length);
-                for (let i = 0; i < slice.length; i++) byteNumbers[i] = slice.charCodeAt(i);
-                byteArrays.push(new Uint8Array(byteNumbers));
-            }
-            return new Blob(byteArrays, {type: contentType});
-        }
-
-        function loadImageFromBlob(imgEl, index) {
-            const art = artifactHistory[index];
-            if (art && art.content.blob) {
-                const url = URL.createObjectURL(art.content.blob);
-                imgEl.src = url;
-                imgEl.onload = () => {
-                    imgEl.classList.add('loaded');
-                    // Optional: revoke URL later if needed, but keeping for gallery nav
+                // --- 模拟数据: 子日志库 (Micro) [cite: 19] ---
+                // 实际项目中应通过 API 获取
+                const subLogDatabase = {
+                    'run_plan_01': [
+                        { type: 'thought', content: 'User wants a fractal tree. Need to determine recursive depth.', timestamp: '10:00:05' },
+                        { type: 'info', content: 'Set depth = 10, angle = 30 degrees.', timestamp: '10:00:06' }
+                    ],
+                    'run_code_01': [
+                        { type: 'thought', content: 'Importing matplotlib and numpy.', timestamp: '10:00:12' },
+                        { type: 'code', content: 'import matplotlib.pyplot as plt\nimport numpy as np\n\ndef draw_tree(x, y):...', timestamp: '10:00:15' },
+                        { type: 'info', content: 'Code executed successfully. Image buffer generated.', timestamp: '10:00:18' }
+                    ],
+                    'run_review_01': [
+                        { type: 'thought', content: 'Checking for infinite loops...', timestamp: '10:00:45' },
+                        { type: 'error', content: 'Warning: Recursion limit close to max.', timestamp: '10:00:46' },
+                        { type: 'info', content: 'Optimization suggested.', timestamp: '10:00:48' }
+                    ]
                 };
-            }
-        }
 
-        // --- View Logic ---
-        function switchView(mode) {
-            currentViewMode = mode;
-            document.getElementById('btn-view-single').classList.toggle('active', mode === 'single');
-            document.getElementById('btn-view-gallery').classList.toggle('active', mode === 'gallery');
-            document.getElementById('version-controls').style.display = mode === 'single' ? 'flex' : 'none';
-            refreshCanvas();
-        }
+                // --- 模拟数据: 产出物库 (Artifacts) [cite: 121] ---
+                const artifactDatabase = {
+                    'run_code_01': [
+                        { type: 'code', label: 'fractal_tree.py', content: 'def tree(branchLen,t):\n    if branchLen > 5:\n        t.forward(branchLen)\n        t.right(20)\n        tree(branchLen-15,t)\n        t.left(40)\n        tree(branchLen-15,t)\n        t.right(20)\n        t.backward(branchLen)' },
+                        // 使用占位符图片模拟
+                        { type: 'image', label: 'preview_v1.png', content: 'https://placehold.co/600x400/222/green?text=Fractal+Tree+Preview' }
+                    ]
+                };
 
-        function refreshCanvas() {
-            const vp = document.getElementById('canvas-viewport');
-            
-            if (currentViewMode === 'gallery') {
-                // Render All Images in Grid
-                vp.innerHTML = '<div class="gallery-grid" id="gallery-container"></div>';
-                const grid = document.getElementById('gallery-container');
-                
-                const images = artifactHistory.map((art, idx) => ({art, idx})).filter(x => x.art.type === 'image');
-                
-                if (images.length === 0) {
-                    vp.innerHTML = '<div style="text-align:center; padding-top:50px; color:#555;">No images in gallery</div>';
-                    return;
-                }
-
-                images.forEach(({art, idx}) => {
-                    const div = document.createElement('div');
-                    div.className = 'image-card';
-                    div.innerHTML = `
-                        <div style="margin-bottom:5px; font-size:0.8rem; color:#aaa;">${art.label}</div>
-                        <img data-blob-key="${idx}" alt="Lazy Loading...">
-                        <div class="lazy-placeholder"><i class="fas fa-spinner fa-spin"></i> Loading...</div>
-                    `;
-                    grid.appendChild(div);
-                    // Observe the IMG element
-                    imageObserver.observe(div.querySelector('img'));
+                // --- 计算属性 ---
+                const currentSubLogs = computed(() => {
+                    return currentRunId.value ? (subLogDatabase[currentRunId.value] || []) : [];
                 });
 
-            } else {
-                // Single View
-                if (artifactHistory.length > 0) renderArtifact(artifactHistory[currentVerIndex]);
+                const currentArtifacts = computed(() => {
+                    return currentRunId.value ? (artifactDatabase[currentRunId.value] || []) : [];
+                });
+
+                // --- 方法 ---
+                const selectRun = (runId) => {
+                    currentRunId.value = runId;
+                    viewMode.value = 'terminal'; // 默认回终端看日志
+                    // 重新高亮代码 [cite: 149]
+                    nextTick(() => {
+                        Prism.highlightAll();
+                    });
+                };
+
+                const sendIntervention = () => {
+                    if (!userInput.value) return;
+                    // 模拟插入一条人工干预日志 [cite: 16]
+                    mainLogs.value.push({
+                        agent: 'Human (HITL)',
+                        message: `Intervention: ${userInput.value}`,
+                        time: new Date().toLocaleTimeString(),
+                        run_id: null
+                    });
+                    userInput.value = '';
+                    // 这里可以添加实际的 API 调用
+                };
+
+                const getSubLogCount = (runId) => (subLogDatabase[runId] || []).length;
+                const getArtifactCount = (runId) => (artifactDatabase[runId] || []).length;
+
+                return {
+                    taskId, currentPhase, userInput, mainLogs, 
+                    currentRunId, viewMode, currentSubLogs, currentArtifacts,
+                    selectRun, sendIntervention, getSubLogCount, getArtifactCount
+                };
+            },
+            mounted() {
+                // 初始化 Prism
+                Prism.highlightAll();
             }
-        }
-
-        function renderArtifact(art) {
-            const vp = document.getElementById('canvas-viewport'); vp.innerHTML = '';
-            
-            // Meta Header
-            const metaHeader = document.createElement('div');
-            metaHeader.className = 'art-meta-header';
-            const traceShort = art.trace_id ? art.trace_id.slice(0,8) : 'N/A';
-            const nodeShort = art.node_id ? art.node_id.slice(-4) : 'N/A';
-            
-            metaHeader.innerHTML = `
-                <div class="art-meta-info">
-                    <span title="Trace ID: ${art.trace_id || 'N/A'}">Trace: ${traceShort}</span>
-                    <span title="Click to jump to log" onclick="jumpToLog('${art.node_id}')">Node: ${nodeShort}</span>
-                </div>
-                <button class="quote-btn" onclick="quoteArtifact('${art.type}', '${art.label}', '${art.node_id}')">
-                    <i class="fas fa-quote-right"></i> Quote
-                </button>
-            `;
-            vp.appendChild(metaHeader);
-
-            if (art.type === 'code') {
-                const div = document.createElement('div'); div.className = 'code-container';
-                div.style.borderTop = 'none'; 
-                div.innerHTML = `<pre><code class="language-python">${escapeHtml(art.content)}</code></pre>`;
-                vp.appendChild(div); Prism.highlightAllUnder(div);
-            } else if (art.type === 'image') {
-                // Single view also uses lazy load logic for consistency/memory
-                const div = document.createElement('div'); div.className = 'image-card';
-                div.style.borderTop = 'none';
-                div.innerHTML = `<img data-blob-key="${currentVerIndex}">`;
-                vp.appendChild(div);
-                loadImageFromBlob(div.querySelector('img'), currentVerIndex);
-            } else if (art.type === 'report') {
-                const div = document.createElement('div'); div.className = 'report-view';
-                div.innerHTML = marked.parse(art.content); vp.appendChild(div);
-            }
-        }
-
-        // --- Standard UI Functions ---
-        function updateVersionUI() {
-            const btnPrev = document.getElementById('btn-prev'); const btnNext = document.getElementById('btn-next'); const label = document.getElementById('ver-label');
-            if (artifactHistory.length === 0) { label.innerText = "EMPTY"; btnPrev.disabled = true; btnNext.disabled = true; return; }
-            const current = artifactHistory[currentVerIndex];
-            label.innerText = `${current.label} (${currentVerIndex + 1}/${artifactHistory.length})`;
-            btnPrev.disabled = currentVerIndex <= 0; btnNext.disabled = currentVerIndex >= artifactHistory.length - 1;
-        }
-
-        function navVersion(delta) {
-            const newIndex = currentVerIndex + delta;
-            if (newIndex >= 0 && newIndex < artifactHistory.length) {
-                currentVerIndex = newIndex; 
-                if (currentViewMode === 'single') renderArtifact(artifactHistory[currentVerIndex]);
-                updateVersionUI();
-            }
-        }
-
-        function quoteArtifact(type, label, nodeId) {
-            const input = document.getElementById('input-task');
-            const ref = `[REF: ${type.toUpperCase()} ${label} (Node: ${nodeId.slice(-4)})] `;
-            input.value = ref + input.value; input.focus();
-        }
-
-        function jumpToLog(nodeId) {
-            const logEl = document.getElementById(`log-node-${nodeId}`);
-            if (logEl) { logEl.scrollIntoView({ behavior: 'smooth', block: 'center' }); logEl.classList.add('highlight'); setTimeout(() => logEl.classList.remove('highlight'), 2000); }
-        }
-
-        function setPhase(phase) {
-            phaseBadge.innerText = phase;
-            document.querySelectorAll('.proto-segment').forEach(el => el.classList.remove('active'));
-            if (phase === 'INITIAL_PLAN') document.getElementById('p-plan').classList.add('active');
-            else if (phase === 'SUB_TASK_EXECUTION') document.getElementById('p-exec').classList.add('active');
-            else if (phase === 'REGRESSION_SUMMARY') document.getElementById('p-summ').classList.add('active');
-        }
-
-        function renderBreadcrumbs(path) {
-            breadcrumbBar.innerHTML = '';
-            path.forEach((node, index) => {
-                const span = document.createElement('span'); span.className = 'crumb-item';
-                span.innerText = node.label; breadcrumbBar.appendChild(span);
-                if (index < path.length - 1) { const sep = document.createElement('span'); sep.className='crumb-sep'; sep.innerText='>'; breadcrumbBar.appendChild(sep); }
-            });
-        }
-
-        function appendLog(type, text, nodeId=null) {
-            const div = document.createElement('div'); div.className = `log-entry type-${type}`;
-            if (nodeId) div.id = `log-node-${nodeId}`;
-            const time = new Date().toLocaleTimeString().split(' ')[0];
-            div.innerHTML = `<span class="log-time">${time}</span> ${text}`;
-            logContainer.appendChild(div); logContainer.scrollTop = logContainer.scrollHeight;
-        }
-
-        function escapeHtml(text) { return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;"); }
-
-        const resizer = document.getElementById('resizer'); const leftPanel = document.getElementById('left-panel'); const mainLayout = document.getElementById('main-layout');
-        let isResizing = false;
-        resizer.addEventListener('mousedown', () => { isResizing = true; document.body.style.cursor = 'col-resize'; });
-        document.addEventListener('mousemove', (e) => { if (!isResizing) return; leftPanel.style.flex = `0 0 ${(e.clientX / mainLayout.offsetWidth) * 100}%`; });
-        document.addEventListener('mouseup', () => { isResizing = false; document.body.style.cursor = 'default'; });
+        }).mount('#app');
     </script>
 </body>
 </html>
