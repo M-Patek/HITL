@@ -17,10 +17,15 @@ class VectorMemoryTool:
     支持语义缓存 (Semantic Caching) 的向量记忆工具。
     """
     def __init__(self, api_key: str, environment: str, index_name: str):
+        # 检查是否具备启用条件
         self.enabled = bool(api_key and index_name and Pinecone)
         if self.enabled:
-            self.pc = Pinecone(api_key=api_key)
-            self.index = self.pc.Index(index_name)
+            try:
+                self.pc = Pinecone(api_key=api_key)
+                self.index = self.pc.Index(index_name)
+            except Exception as e:
+                logger.error(f"Pinecone init failed: {e}")
+                self.enabled = False
         else:
             logger.warning("Pinecone not configured. Memory & Caching disabled.")
 
@@ -29,6 +34,7 @@ class VectorMemoryTool:
         if not text: return []
         try:
             # 这里的 model 需与您的 Pinecone index 维度一致 (e.g., 768)
+            # 注意：如果安装的是 google-generativeai，此调用方式正确
             result = genai.embed_content(
                 model="models/text-embedding-004",
                 content=text,
@@ -87,3 +93,30 @@ class VectorMemoryTool:
                 }])
         except Exception as e:
             logger.warning(f"Failed to store cache: {e}")
+
+    def store_output(self, task_id: str, content: str, agent_role: str):
+        """
+        [Fix] 存储 Agent 的产出到长期记忆中。
+        之前 agents.py 调用了这个不存在的方法，现在我们补全它。
+        """
+        if not self.enabled: 
+            # 如果没启用，仅打印日志
+            logger.info(f"💾 [Memory Mock] Storing output from {agent_role} (Pinecone Disabled)")
+            return
+
+        try:
+            vector = self._get_embedding(content)
+            if vector:
+                self.index.upsert(vectors=[{
+                    "id": f"mem-{task_id}-{agent_role}-{hash(content)}",
+                    "values": vector,
+                    "metadata": {
+                        "type": "agent_output",
+                        "task_id": task_id,
+                        "agent": agent_role,
+                        "content_snippet": content[:500]
+                    }
+                }])
+                logger.info(f"💾 [Memory] Saved output from {agent_role}")
+        except Exception as e:
+            logger.error(f"Failed to store output: {e}")
