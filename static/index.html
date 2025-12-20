@@ -14,7 +14,6 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/9.1.2/marked.min.js"></script>
 
     <style>
-        /* --- 移植自“迭代前”的深色主题变量  --- */
         :root {
             --bg-color: #1e1e1e;
             --panel-bg: #252526;
@@ -44,7 +43,7 @@
             border-left: 3px solid var(--accent);
         }
 
-        /* 画廊网格 [cite: 84] */
+        /* 画廊网格 */
         .gallery-grid {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
@@ -73,6 +72,17 @@
 
     <div id="app" class="flex flex-col h-full">
         
+        <!-- 启动遮罩层 -->
+        <div v-if="!isTaskRunning && !isTaskFinished && mainLogs.length === 0" class="fixed inset-0 bg-black/80 flex items-center justify-center z-50">
+            <div class="bg-[#252526] p-6 rounded-lg border border-[#333] w-[500px] shadow-2xl">
+                <h2 class="text-xl font-bold text-green-500 mb-4"><i class="fas fa-power-off"></i> Initialize System</h2>
+                <textarea v-model="initialInput" class="w-full bg-[#1e1e1e] border border-[#444] text-white p-3 rounded mb-4 h-32 focus:border-green-500 outline-none" placeholder="输入您的初始任务描述... (e.g. 帮我写一个贪吃蛇游戏并分析复杂度)"></textarea>
+                <button @click="startSystem" :disabled="!initialInput" class="w-full bg-green-600 hover:bg-green-700 text-white py-2 rounded font-bold disabled:opacity-50">
+                    <i class="fas fa-play"></i> Start Mission
+                </button>
+            </div>
+        </div>
+
         <header class="h-14 bg-[#2d2d2d] border-b border-[#333] flex items-center justify-between px-4 shrink-0">
             <div class="flex items-center gap-3">
                 <h1 class="text-lg font-bold text-green-500"><i class="fas fa-robot"></i> Gemini Commander</h1>
@@ -159,19 +169,8 @@
                         </div>
                         
                         <div v-for="(entry, idx) in currentSubLogs" :key="idx" class="mb-4 pl-4 border-l-2 border-green-800">
+                            <!-- 这里展示 mock 或真实微观日志，暂时 API 没推微观日志，预留位置 -->
                             <div class="text-xs text-gray-500 mb-1">{{ entry.timestamp }}</div>
-                            
-                            <div v-if="entry.type === 'thought'" class="text-gray-400 italic">Thinking: {{ entry.content }}</div>
-                            <div v-else-if="entry.type === 'info'" class="text-gray-300">{{ entry.content }}</div>
-                            
-                            <div v-else-if="entry.type === 'error'" class="text-red-400 bg-red-900/20 p-2 rounded border border-red-900">
-                                <i class="fas fa-exclamation-triangle"></i> {{ entry.content }}
-                            </div>
-
-                            <div v-else-if="entry.type === 'code'" class="mt-2 text-xs">
-                                <div class="bg-black/50 p-1 text-gray-500 rounded-t border border-[#444] border-b-0">Code Execution</div>
-                                <pre class="bg-[#111] p-2 rounded-b border border-[#444] text-green-300 whitespace-pre-wrap font-mono">{{ entry.content }}</pre>
-                            </div>
                         </div>
                         <div v-if="currentRunId" class="pl-4 text-green-500"><span class="blink">_</span></div>
                     </div>
@@ -208,96 +207,190 @@
     </div>
 
     <script>
-        const { createApp, ref, computed, nextTick } = Vue;
+        const { createApp, ref, computed, nextTick, reactive } = Vue;
 
         createApp({
             setup() {
                 // --- 状态数据 ---
-                const taskId = ref('task_phx_001');
-                const currentPhase = ref('EXECUTION');
+                const taskId = ref('Waiting...');
+                const currentPhase = ref('IDLE');
                 const userInput = ref('');
+                const initialInput = ref('');
                 const viewMode = ref('terminal'); // terminal | canvas
                 const currentRunId = ref(null);
+                
+                const isTaskRunning = ref(false);
+                const isTaskFinished = ref(false);
 
-                // --- 模拟数据: 主日志 (Macro) [cite: 13] ---
-                const mainLogs = ref([
-                    { agent: 'System', message: 'Phoenix Protocol Initialized.', time: '10:00:01', run_id: null },
-                    { agent: 'Planner', message: 'Analyzing market data structure...', time: '10:00:05', run_id: 'run_plan_01' },
-                    { agent: 'Coder', message: 'Generating Python visualization script.', time: '10:00:12', run_id: 'run_code_01' },
-                    { agent: 'Reviewer', message: 'Validating output vs constraints.', time: '10:00:45', run_id: 'run_review_01' }
-                ]);
+                // 动态日志数据
+                const mainLogs = ref([]);
+                
+                // 数据仓库 (按 run_id 索引)
+                const subLogDatabase = reactive({});
+                const artifactDatabase = reactive({});
 
-                // --- 模拟数据: 子日志库 (Micro) [cite: 19] ---
-                // 实际项目中应通过 API 获取
-                const subLogDatabase = {
-                    'run_plan_01': [
-                        { type: 'thought', content: 'User wants a fractal tree. Need to determine recursive depth.', timestamp: '10:00:05' },
-                        { type: 'info', content: 'Set depth = 10, angle = 30 degrees.', timestamp: '10:00:06' }
-                    ],
-                    'run_code_01': [
-                        { type: 'thought', content: 'Importing matplotlib and numpy.', timestamp: '10:00:12' },
-                        { type: 'code', content: 'import matplotlib.pyplot as plt\nimport numpy as np\n\ndef draw_tree(x, y):...', timestamp: '10:00:15' },
-                        { type: 'info', content: 'Code executed successfully. Image buffer generated.', timestamp: '10:00:18' }
-                    ],
-                    'run_review_01': [
-                        { type: 'thought', content: 'Checking for infinite loops...', timestamp: '10:00:45' },
-                        { type: 'error', content: 'Warning: Recursion limit close to max.', timestamp: '10:00:46' },
-                        { type: 'info', content: 'Optimization suggested.', timestamp: '10:00:48' }
-                    ]
+                // --- API 配置 ---
+                const API_BASE = window.location.origin; // 自动获取当前源
+
+                // --- 核心方法: 启动系统 ---
+                const startSystem = async () => {
+                    if (!initialInput.value) return;
+                    
+                    try {
+                        // 1. 调用 Start Task API
+                        isTaskRunning.value = true;
+                        const res = await fetch(`${API_BASE}/api/start_task`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ user_input: initialInput.value })
+                        });
+                        
+                        if (!res.ok) throw new Error('Failed to start task');
+                        const data = await res.json();
+                        
+                        taskId.value = data.task_id;
+                        currentPhase.value = 'PLANNING';
+                        
+                        // 2. 建立 SSE 连接
+                        connectEventStream(data.task_id);
+                        
+                    } catch (e) {
+                        alert('Error: ' + e.message);
+                        isTaskRunning.value = false;
+                    }
                 };
 
-                // --- 模拟数据: 产出物库 (Artifacts) [cite: 121] ---
-                const artifactDatabase = {
-                    'run_code_01': [
-                        { type: 'code', label: 'fractal_tree.py', content: 'def tree(branchLen,t):\n    if branchLen > 5:\n        t.forward(branchLen)\n        t.right(20)\n        tree(branchLen-15,t)\n        t.left(40)\n        tree(branchLen-15,t)\n        t.right(20)\n        t.backward(branchLen)' },
-                        // 使用占位符图片模拟
-                        { type: 'image', label: 'preview_v1.png', content: 'https://placehold.co/600x400/222/green?text=Fractal+Tree+Preview' }
-                    ]
-                };
+                // --- 核心方法: SSE 流处理 ---
+                const connectEventStream = (tid) => {
+                    const evtSource = new EventSource(`${API_BASE}/api/stream/${tid}`);
+                    
+                    evtSource.onmessage = (event) => {
+                        // 心跳或无效数据
+                        if (!event.data || event.data === 'end') return;
+                    };
 
-                // --- 计算属性 ---
-                const currentSubLogs = computed(() => {
-                    return currentRunId.value ? (subLogDatabase[currentRunId.value] || []) : [];
-                });
+                    // 1. 宏观日志 (Macro Log) -> 左侧列表
+                    evtSource.addEventListener("macro_log", (event) => {
+                        const data = JSON.parse(event.data);
+                        mainLogs.value.push({
+                            agent: data.agent,
+                            message: data.message,
+                            run_id: data.run_id,
+                            time: new Date().toLocaleTimeString()
+                        });
+                        // 自动滚动到底部
+                        scrollToBottom();
+                        
+                        // 如果有 run_id，自动选中它以便查看详情
+                        if (data.run_id) {
+                            if (!subLogDatabase[data.run_id]) subLogDatabase[data.run_id] = [];
+                            currentRunId.value = data.run_id;
+                        }
+                    });
 
-                const currentArtifacts = computed(() => {
-                    return currentRunId.value ? (artifactDatabase[currentRunId.value] || []) : [];
-                });
+                    // 2. 产出物 (Artifacts) -> 画布/代码
+                    evtSource.addEventListener("artifact", (event) => {
+                        const data = JSON.parse(event.data);
+                        // 关联到当前最新的 run_id (如果没有 run_id，则关联到全局 'root')
+                        const targetRunId = currentRunId.value || 'root';
+                        
+                        if (!artifactDatabase[targetRunId]) artifactDatabase[targetRunId] = [];
+                        
+                        // 避免重复添加 (简单去重)
+                        const exists = artifactDatabase[targetRunId].some(a => a.label === data.label);
+                        if (!exists) {
+                            artifactDatabase[targetRunId].push({
+                                type: data.type, // 'image' or 'code'
+                                label: data.label,
+                                content: data.content // Base64 or Text
+                            });
+                        }
+                    });
 
-                // --- 方法 ---
-                const selectRun = (runId) => {
-                    currentRunId.value = runId;
-                    viewMode.value = 'terminal'; // 默认回终端看日志
-                    // 重新高亮代码 [cite: 149]
-                    nextTick(() => {
-                        Prism.highlightAll();
+                    // 3. 错误处理
+                    evtSource.addEventListener("error", (event) => {
+                        // SSE 的 error 事件 data 通常为空，或者是网络错误
+                        if (event.data) {
+                            console.error("Stream Error:", event.data);
+                            mainLogs.value.push({
+                                agent: 'System', message: `Error: ${event.data}`, time: new Date().toLocaleTimeString()
+                            });
+                        }
+                        // 如果是 finish 事件 (自定义)
+                        if (event.type === 'finish') {
+                            evtSource.close();
+                            isTaskRunning.value = false;
+                            isTaskFinished.value = true;
+                            currentPhase.value = 'COMPLETED';
+                        }
+                    });
+                    
+                    // 自定义结束事件
+                    evtSource.addEventListener("finish", () => {
+                        console.log("Stream finished.");
+                        evtSource.close();
+                        isTaskRunning.value = false;
+                        isTaskFinished.value = true;
+                        currentPhase.value = 'DONE';
                     });
                 };
 
-                const sendIntervention = () => {
-                    if (!userInput.value) return;
-                    // 模拟插入一条人工干预日志 [cite: 16]
+                // --- 核心方法: 人工干预 ---
+                const sendIntervention = async () => {
+                    if (!userInput.value || !taskId.value) return;
+                    
+                    const cmd = userInput.value;
+                    userInput.value = ''; // 清空输入框
+                    
+                    // 乐观更新 UI
                     mainLogs.value.push({
                         agent: 'Human (HITL)',
-                        message: `Intervention: ${userInput.value}`,
+                        message: `Intervention: ${cmd}`,
                         time: new Date().toLocaleTimeString(),
                         run_id: null
                     });
-                    userInput.value = '';
-                    // 这里可以添加实际的 API 调用
+
+                    try {
+                        await fetch(`${API_BASE}/api/intervention`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ 
+                                task_id: taskId.value,
+                                command: cmd 
+                            })
+                        });
+                    } catch (e) {
+                        mainLogs.value.push({ agent: 'System', message: 'Intervention Failed: ' + e.message });
+                    }
                 };
 
+                // --- 辅助逻辑 ---
+                const selectRun = (runId) => {
+                    currentRunId.value = runId;
+                    viewMode.value = 'terminal';
+                    nextTick(() => Prism.highlightAll());
+                };
+
+                const scrollToBottom = () => {
+                    // 简单实现：找到列表容器滚动 (需配合 DOM 结构，这里仅示意)
+                    const el = document.querySelector('.log-item:last-child');
+                    if (el) el.scrollIntoView({ behavior: 'smooth' });
+                };
+
+                // 计算属性
+                const currentSubLogs = computed(() => currentRunId.value ? (subLogDatabase[currentRunId.value] || []) : []);
+                const currentArtifacts = computed(() => currentRunId.value ? (artifactDatabase[currentRunId.value] || []) : []);
                 const getSubLogCount = (runId) => (subLogDatabase[runId] || []).length;
                 const getArtifactCount = (runId) => (artifactDatabase[runId] || []).length;
 
                 return {
-                    taskId, currentPhase, userInput, mainLogs, 
+                    taskId, currentPhase, userInput, initialInput, mainLogs, 
                     currentRunId, viewMode, currentSubLogs, currentArtifacts,
-                    selectRun, sendIntervention, getSubLogCount, getArtifactCount
+                    isTaskRunning, isTaskFinished,
+                    startSystem, selectRun, sendIntervention, getSubLogCount, getArtifactCount
                 };
             },
             mounted() {
-                // 初始化 Prism
                 Prism.highlightAll();
             }
         }).mount('#app');
