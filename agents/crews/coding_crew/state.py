@@ -4,33 +4,34 @@ from agents.common_types import BaseAgentState
 class CodingCrewState(BaseAgentState):
     """
     Coding Crew 内部专用状态
-    继承自 BaseAgentState，确保 task_id 等基础字段存在。
     """
-    # 当前指令
-    current_instruction: str
+    # 继承自 BaseAgentState:
+    # user_input: str
+    # chat_history: List[BaseMessage]
+    # next_step: str
     
-    # 核心产出
+    current_instruction: str
     generated_code: str = ""
     filename: str = "main.py"
     
-    # 执行结果 (Sandbox)
+    # 执行结果
     execution_stdout: str = ""
     execution_stderr: str = ""
     execution_passed: bool = False
     
-    # 审查结果
+    # Reviewer 反馈
     review_feedback: str = ""
-    review_status: str = "pending" # pending, approve, reject
+    review_status: str = "pending" # 'approve', 'reject', 'pending'
     review_report: Optional[Dict[str, Any]] = None
     
-    # 自我修正计数
-    iteration_count: int = 0
+    # [🔥 New] Tech Lead 的深度反思
+    # 当 review_status 为 reject 时，由 Reflector 填充此字段，指导 Coder 进行修复
+    reflection: str = "" 
     
-    # 最终对外输出
+    # 迭代控制
+    iteration_count: int = 0
     final_output: str = ""
     
-    # 视觉产物
+    # 产物
     image_artifacts: List[Dict[str, str]] = []
-    
-    # 引用全局状态的 artifacts (Read-only copy usually)
     global_artifacts: Dict[str, Any] = {}
