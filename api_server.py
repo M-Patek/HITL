@@ -12,6 +12,7 @@ from collections import defaultdict
 
 from config.keys import GEMINI_API_KEYS, PINECONE_API_KEY, PINECONE_ENVIRONMENT, VECTOR_INDEX_NAME
 from core.rotator import GeminiKeyRotator
+from core.api_models import TaskRequest  # [Fix] Import unified model
 from tools.memory import VectorMemoryTool
 from tools.search import GoogleSearchTool
 from workflow.graph import build_agent_workflow
@@ -36,7 +37,7 @@ app.add_middleware(
 
 # 初始化全局组件
 checkpointer = MemorySaver()
-rotator = GeminiKeyRotator(GEMINI_API_KEYS)
+rotator = GeminiKeyRotator(GEMINI_API_KEYS[0], GEMINI_API_KEYS[0]) # Assuming keys provided in env
 memory = VectorMemoryTool(PINECONE_API_KEY, PINECONE_ENVIRONMENT, VECTOR_INDEX_NAME)
 search = GoogleSearchTool()
 
@@ -67,11 +68,6 @@ class EventStreamManager:
 
 stream_manager = EventStreamManager()
 
-# --- API Models ---
-
-class TaskRequest(BaseModel):
-    task: str
-
 class InterventionRequest(BaseModel):
     task_id: str
     command: str
@@ -81,6 +77,7 @@ class InterventionRequest(BaseModel):
 async def run_workflow_background(task_id: str, initial_input: Dict, config: Dict):
     """
     后台运行工作流，并将事件实时推送到 SSE 队列
+    [Fix] Added cancellation handling
     """
     thread_id = config["configurable"]["thread_id"]
     logger.info(f"🚀 [Background] Workflow started for: {task_id}")
@@ -108,23 +105,27 @@ async def run_workflow_background(task_id: str, initial_input: Dict, config: Dic
                     })
 
                 # 2. 捕获产出物 (Artifacts)
-                # 检查 code_blocks 或 images 的变化 (这里简化处理，实际可做 diff)
                 if ps.artifacts.get("images"):
-                    for img in ps.artifacts["images"][-1:]: # 推送最新的
+                    for img in ps.artifacts["images"][-1:]: 
                          await stream_manager.push_event(task_id, "artifact", {
                              "type": "image", 
                              "label": img.get('filename', 'output.png'), 
-                             "content": img.get('data') # Base64
+                             "content": img.get('data') 
                          })
 
                 # 3. 模拟捕获微观日志 (Micro Log)
-                # 在真实场景中，这里应该从 ps.active_node.local_history 中提取
-                # 为了配合您的前端演示，我们这里发一个信号让前端去刷新子日志
                 if ps.next_step and ps.next_step.get('run_id'):
                      await stream_manager.push_event(task_id, "micro_log_signal", {
                          "run_id": ps.next_step.get('run_id'),
                          "status": "processing"
                      })
+
+    except asyncio.CancelledError:
+        logger.warning(f"⚠️ Workflow cancelled: {task_id}")
+        await stream_manager.push_event(task_id, "error", "Task was cancelled by server shutdown.")
+        # Do not re-raise if we want to suppress stack trace in server logs, 
+        # or re-raise to let FastAPI background task handler know. 
+        # Usually cleaner to just log and exit.
 
     except Exception as e:
         logger.error(f"💥 Workflow failed: {e}", exc_info=True)
@@ -132,7 +133,7 @@ async def run_workflow_background(task_id: str, initial_input: Dict, config: Dic
     finally:
         logger.info(f"🏁 Workflow finished: {task_id}")
         await stream_manager.push_event(task_id, "macro_log", {
-            "agent": "System", "message": "Task Completed.", "run_id": None
+            "agent": "System", "message": "Task Completed/Stopped.", "run_id": None
         })
         await stream_manager.close_stream(task_id)
 
@@ -145,20 +146,23 @@ async def health_check():
 @app.post("/api/start_task")
 async def start_task(req: TaskRequest, background_tasks: BackgroundTasks):
     """启动任务并准备流"""
-    if not req.task:
-        raise HTTPException(status_code=400, detail="Task required")
+    # [Fix] Use req.user_input instead of req.task
+    if not req.user_input:
+        raise HTTPException(status_code=400, detail="Task required (user_input)")
 
     task_id = f"task_{int(time.time())}"
-    thread_id = f"thread_{task_id}"
+    # Use provided thread_id or generate new one
+    thread_id = req.thread_id if req.thread_id else f"thread_{task_id}"
     
     # 初始化 State
-    user_parts = [{"text": req.task}]
+    user_parts = [{"text": req.user_input}]
     ps = ProjectState(
         task_id=task_id,
-        user_input=req.task,
+        user_input=req.user_input,
         full_chat_history=[{"role": "user", "parts": user_parts}]
     )
     
+    # 构造 AgentGraphState
     initial_input = {"project_state": ps}
     config = {"configurable": {"thread_id": thread_id}}
     
