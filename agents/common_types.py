@@ -1,22 +1,19 @@
-from typing import TypedDict, List, Dict, Any, Optional
+from typing import TypedDict, TYPE_CHECKING
 from pydantic import BaseModel, Field
 
-# --- Base States ---
+# 避免循环导入，仅在类型检查时导入
+if TYPE_CHECKING:
+    from core.models import ProjectState
 
-class BaseAgentState(TypedDict):
-    """基础 Agent 状态字典"""
-    task_id: str
-    user_input: str
-    current_instruction: str
-    # History
-    full_chat_history: List[Dict[str, Any]]
-    # Feedback
-    review_status: str
-    review_feedback: str
-    # Artifacts
-    generated_code: str
-    image_artifacts: List[Dict[str, str]]
-    final_output: str
+# --- Unified State Definition ---
+
+class AgentGraphState(TypedDict):
+    """
+    [Unified State] 全局统一的 Agent 图状态。
+    不再使用扁平的 BaseAgentState，而是将所有上下文封装在 project_state 中。
+    这使得状态管理更加结构化，并支持 SIG-HA 溯源和向量时钟。
+    """
+    project_state: 'ProjectState'
 
 # --- Protocol Phase 3: Efficiency Protocols ---
 
@@ -32,3 +29,6 @@ class ContextConstraint(BaseModel):
         default="summary_only", 
         description="剪枝策略: 'fifo' (先进先出) | 'summary_only' (只保留摘要) | 'smart_selection' (RAG 筛选)"
     )
+
+    class Config:
+        arbitrary_types_allowed = True
