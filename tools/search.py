@@ -13,6 +13,7 @@ class GoogleSearchTool:
     """
     真实搜索工具 (Powered by Tavily API).
     提供针对 AI 优化的实时网络搜索结果。
+    已确认全链路异步非阻塞。
     """
     
     def __init__(self):
@@ -28,6 +29,7 @@ class GoogleSearchTool:
     async def search(self, query: str) -> str:
         """
         执行搜索 (Async Wrapper)。
+        使用 run_in_executor 将同步的 Tavily API 调用移出事件循环。
         """
         # 1. 如果没有客户端，走备用逻辑
         if not self.client:
@@ -38,15 +40,17 @@ class GoogleSearchTool:
         try:
             # Tavily 官方库是同步的，为了不阻塞 Brain 的主循环，我们在 Executor 中运行
             loop = asyncio.get_running_loop()
-            response = await loop.run_in_executor(
-                None, 
-                lambda: self.client.search(
+            
+            # 使用 lambda 或 partial 封装同步调用
+            def _do_search():
+                return self.client.search(
                     query, 
                     search_depth="basic", 
                     max_results=3,
                     include_answer=True # 让 Tavily 尝试直接回答
                 )
-            )
+            
+            response = await loop.run_in_executor(None, _do_search)
             
             # 2. 格式化结果供 LLM 阅读
             context = []
