@@ -12,6 +12,25 @@ class GeminiKeyRotator:
         self.base_url = base_url
         self.api_key = api_key
 
+    def check_gateway_health(self) -> str:
+        """
+        [Fix] 检查网关或 API Key 是否可用
+        """
+        if not self.api_key:
+            return "misconfigured_no_key"
+        
+        # 简单做一次轻量级请求 (列出模型) 来验证连接
+        # 这里使用 REST API 方式，避免依赖 SDK 版本
+        try:
+            url = f"https://generativelanguage.googleapis.com/v1beta/models?key={self.api_key}"
+            resp = requests.get(url, timeout=5)
+            if resp.status_code == 200:
+                return "connected"
+            else:
+                return f"error_{resp.status_code}"
+        except Exception:
+            return "disconnected"
+
     def _get_model_by_complexity(self, complexity: str) -> str:
         """根据复杂度路由到对应的模型 Tier"""
         if complexity == "simple":
