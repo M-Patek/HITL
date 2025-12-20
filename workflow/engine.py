@@ -80,6 +80,7 @@ async def run_workflow(user_input: str, thread_id: str) -> AsyncGenerator[Dict[s
     
     if not snapshot.values:
         ps = ProjectState.init_from_task(user_input, f"T-{thread_id[-4:]}")
+        # [Fix] Ensure State Injection aligns with AgentGraphState Schema
         current_input = {"project_state": ps}
         yield {"event_type": "status", "data": f"🚀 S.W.A.R.M. Tree Initialized: {ps.task_id}"}
     else:
@@ -90,6 +91,7 @@ async def run_workflow(user_input: str, thread_id: str) -> AsyncGenerator[Dict[s
                 ps = snapshot.values.get('project_state')
                 if ps:
                     ps.user_feedback_queue = user_input
+                    # [Fix] Update state using the nested 'project_state' key
                     _app.update_state(config, {"project_state": ps})
             current_input = None
         else:
@@ -154,7 +156,7 @@ async def run_workflow(user_input: str, thread_id: str) -> AsyncGenerator[Dict[s
                 if isinstance(ps.next_step.get("parallel_agents"), list):
                     agent_label = "+".join([str(a)[:4].upper() for a in ps.next_step["parallel_agents"]])
                 else:
-                    agent_label = ps.next_step.get("agent_name")
+                    agent_label = ps.next_step.get("agent_name", "Unknown")
             
             yield {
                 "event_type": "update", 
