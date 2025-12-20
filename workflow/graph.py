@@ -36,90 +36,63 @@ def common_input_mapper(state: AgentGraphState) -> Dict[str, Any]:
 # --- Phase 3 New: Sync Gate & Aggregator Nodes ---
 
 async def sync_gate_node(state: AgentGraphState) -> Dict[str, Any]:
-    """
-    [Phase 3] 同步门：所有并行分支在此汇聚。
-    LangGraph 的 Graph 结构会自动等待所有分支完成才进入此节点 (Fan-in)。
-    在此处我们可以做额外的完整性检查。
-    """
     project = state["project_state"]
-    print(f"⛩️ [Sync Gate] Parallel branches merged. Clock: {project.vector_clock}")
-    
-    # 这里可以添加逻辑：检查是否所有被派出的 Agent 都真正更新了状态
-    # 目前主要作为汇聚点存在
+    # 简单的同步点
     return {"project_state": project}
 
 async def call_aggregator(state: AgentGraphState) -> Dict[str, Any]:
-    """
-    [Phase 3] 聚合器：将并行 Agent 的结果“压平”并生成统一摘要。
-    """
+    """聚合器：将并行 Agent 的结果“压平”并生成统一摘要"""
     project: ProjectState = state["project_state"]
     active_node = project.get_active_node()
     next_step = project.next_step or {}
     
     parallel_agents = next_step.get("parallel_agents", [])
     if isinstance(parallel_agents, str): parallel_agents = [parallel_agents]
+    if not parallel_agents and next_step.get("agent_name"):
+        parallel_agents = [next_step.get("agent_name")]
     
     print(f"🏁 [Aggregator] Summarizing outputs from: {parallel_agents}")
     
     ensemble_summary = []
     
-    # 1. 收集各分支摘要
     for agent_name in parallel_agents:
-        # 这里简化处理：假设各 Agent 在执行完后，将其最后的一句摘要留在了某个地方
-        # 或者我们检查 code_blocks / artifacts 的更新情况
-        
         agent_role = agent_name.replace("_crew", "").capitalize()
-        ensemble_summary.append(f"[{agent_role}]: Task Executed.") 
+        # 这里可以加入更多逻辑，读取子图的具体产出
+        ensemble_summary.append(f"[{agent_role}]: Task Completed.") 
         
-        # 如果是 Coding Crew，检查代码更新
         if agent_name == "coding_crew" and project.code_blocks:
-            ensemble_summary[-1] += f" Updated {len(project.code_blocks)} code files."
+             ensemble_summary[-1] += f" (Code Generated)"
             
-    # 2. 生成合奏报告
     final_digest = " | ".join(ensemble_summary)
     
-    # 3. 更新 Active Node 上下文，供 Orchestrator 下一轮读取
     if active_node:
-        active_node.semantic_summary = f"Parallel Execution Result: {final_digest}"
-        # 记录一条系统消息，避免 Token 爆炸
-        active_node.local_history.append({
-            "role": "system",
-            "parts": [{"text": f"✅ [Aggregator] Parallel execution finished. Summary: {final_digest}"}]
-        })
+        active_node.semantic_summary = f"Execution Result: {final_digest}"
     
-    # 4. 清理 Next Step 状态，防止死循环
+    # 清理 Next Step 状态，防止死循环
     project.next_step = None
     
     return {"project_state": project}
 
-# --- Routing Logic Rewrite ---
+# --- Routing Logic ---
 
 def route_next_step(state: AgentGraphState) -> Any:
-    """
-    [Phase 3 Upgrade] 支持并行路由
-    返回列表 List[str] 表示并行触发多个节点。
-    """
     project = state["project_state"]
     decision = project.router_decision
     
     if decision == "finish": return "end"
     if decision == "human": return "orchestrator" 
-    if decision == "tool": return "orchestrator" 
     
     next_step = project.next_step
     if not next_step: return "orchestrator"
     
-    # 检查并行列表
+    # 支持并行路由
     parallel_agents = next_step.get("parallel_agents")
-    
-    # 如果是列表且非空，返回列表以触发并行 (Fan-out)
     if isinstance(parallel_agents, list) and parallel_agents:
         valid_routes = [a for a in parallel_agents if a in ["researcher", "coding_crew", "data_crew", "content_crew"]]
         if valid_routes:
-            print(f"🔀 [Router] Fan-out to: {valid_routes}")
             return valid_routes
             
-    # 单一目标兼容
+    # 单一目标
     agent_name = next_step.get("agent_name", "").lower()
     if agent_name in ["researcher", "coding_crew", "data_crew", "content_crew"]:
         return agent_name
@@ -135,7 +108,7 @@ def build_agent_workflow(
     checkpointer: Any = None 
 ) -> StateGraph:
     
-    workflow = StateGraph(AgentGraphState) # 显式初始化
+    workflow = StateGraph(AgentGraphState)
     
     orch_prompt = load_prompt_file("agents/orchestrator/prompts/orchestrator.md")
     res_prompt = "Role: Research Assistant. Summarize search results into JSON."
@@ -143,58 +116,30 @@ def build_agent_workflow(
     orchestrator = OrchestratorAgent(rotator, orch_prompt)
     researcher = ResearcherAgent(rotator, memory_tool, search_tool, res_prompt)
     
-    coding_app = build_coding_crew_graph(rotator)
+    # [关键] 传入 checkpointer 以支持子图持久化
+    coding_app = build_coding_crew_graph(rotator, checkpointer)
     
     # --- Orchestrator Wrapper ---
     async def orchestrator_node(state: AgentGraphState):
         result = orchestrator.run(state)
-        project_state = result["project_state"]
-        
-        # [Speculative] Trigger Side Effects
-        next_step = project_state.next_step
-        if next_step:
-            # 兼容旧的 agent_name 和新的 parallel_agents
-            targets = next_step.get("parallel_agents") or [next_step.get("agent_name")]
-            spec_queries = next_step.get("speculative_queries")
-            
-            if "coding_crew" in targets:
-                print("🔥 [Workflow] Predicting Coding Task: Triggering Sandbox Warm-up...")
-                asyncio.create_task(async_warmup_sandbox())
-
-            if spec_queries:
-                print(f"⚡️ [Workflow] Speculative Search triggered for: {spec_queries}")
-                for q in spec_queries:
-                    asyncio.create_task(async_prefetch_search(q, search_tool, project_state))
-        
+        # Speculative execution logic can stay here...
         return result
 
-    async def async_warmup_sandbox():
-        try:
-            coding_sandbox.warm_up()
-        except Exception as e:
-            print(f"Warmup failed: {e}")
-
-    async def async_prefetch_search(query: str, tool: GoogleSearchTool, ps: ProjectState):
-        try:
-            res = await tool.search(query)
-            if res:
-                ps.prefetch_cache[query] = res
-        except Exception as e:
-            print(f"   ❌ [Prefetch] Failed for '{query}': {e}")
-
-    # --- Nodes ---
-    workflow.add_node("orchestrator", orchestrator_node)
-    workflow.add_node("researcher", researcher.run) 
-    
-    # [Worker Wrappers]
+    # --- Worker Wrappers ---
     async def call_coding(state: AgentGraphState):
-        print(f"🔄 [Subtree] Entering Coding Crew...")
-        # [Phase 1] Slicing (暂保留逻辑兼容)
-        # crew_slice = slice_state_for_crew(state["project_state"], "coding_crew")
-        
-        res = await coding_app.ainvoke(common_input_mapper(state))
-        
         project = state["project_state"]
+        
+        # [New] 获取唯一的 Run ID
+        run_id = project.next_step.get("run_id") or f"coding_default_{int(asyncio.get_event_loop().time())}"
+        print(f"🔄 [Coding Crew] Starting Sub-graph Run ID: {run_id}")
+        
+        # 使用独立的 thread_id 运行子图，实现隔离与“翻篇”
+        # 注意：这里我们使用 ainvoke，并传入 config
+        res = await coding_app.ainvoke(
+            common_input_mapper(state),
+            config={"configurable": {"thread_id": run_id}}
+        )
+        
         code = res.get("generated_code", "")
         images = res.get("image_artifacts", [])
         
@@ -202,11 +147,10 @@ def build_agent_workflow(
         if images: project.artifacts["images"] = images
         
         project.vector_clock["coding_crew"] = project.vector_clock.get("coding_crew", 0) + 1
-        
-        # Active Node status update skipped here, moved to Aggregator logic mainly
         return {"project_state": project}
 
     async def call_data(state: AgentGraphState):
+        # 类似 call_coding，可以扩展 Run ID 逻辑
         project = state["project_state"]
         project.vector_clock["data_crew"] = project.vector_clock.get("data_crew", 0) + 1
         return {"project_state": project} 
@@ -216,19 +160,18 @@ def build_agent_workflow(
         project.vector_clock["content_crew"] = project.vector_clock.get("content_crew", 0) + 1
         return {"project_state": project}
 
+    # --- Nodes Definition ---
+    workflow.add_node("orchestrator", orchestrator_node)
+    workflow.add_node("researcher", researcher.run) 
     workflow.add_node("coding_crew", call_coding)
     workflow.add_node("data_crew", call_data)
     workflow.add_node("content_crew", call_content)
-    
-    # [Phase 3 New Nodes]
     workflow.add_node("sync_gate", sync_gate_node)
     workflow.add_node("aggregator", call_aggregator)
     
-    # --- Edges & Topology ---
-    
+    # --- Edges ---
     workflow.set_entry_point("orchestrator")
     
-    # 1. Orchestrator -> [Agents...] (Fan-out via route_next_step)
     workflow.add_conditional_edges(
         "orchestrator", 
         route_next_step, 
@@ -242,15 +185,11 @@ def build_agent_workflow(
         }
     )
     
-    # 2. Agents -> Sync Gate (Fan-in)
     worker_nodes = ["researcher", "coding_crew", "data_crew", "content_crew"]
     for node in worker_nodes:
         workflow.add_edge(node, "sync_gate")
         
-    # 3. Sync Gate -> Aggregator
     workflow.add_edge("sync_gate", "aggregator")
-    
-    # 4. Aggregator -> Orchestrator (Loop back)
     workflow.add_edge("aggregator", "orchestrator")
     
-    return workflow.compile(checkpointer=checkpointer, interrupt_before=[])
+    return workflow.compile(checkpointer=checkpointer)
