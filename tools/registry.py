@@ -5,6 +5,7 @@ class ToolRegistry:
     """
     [Phase 1] Tool Metadata Registry
     集中管理所有工具的 JSON Schema 定义。
+    [Fix] Memory Schema aligned with actual implementation in memory.py
     """
     
     @staticmethod
@@ -45,21 +46,33 @@ class ToolRegistry:
     def get_memory_schema() -> ToolDefinition:
         return {
             "name": "vector_memory",
-            "description": "长期记忆库 (RAG)。用于存储重要的知识片段或检索之前的项目经验。",
+            "description": "长期记忆库 (RAG)。支持语义检索 (Retrieve) 和 知识存储 (Store)。",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "action": {
                         "type": "string",
-                        "description": "操作类型：'store' (存储) 或 'retrieve' (检索)。",
-                        "enum": ["store", "retrieve"]
+                        "description": "操作类型：'retrieve' (查) 或 'store' (存)。",
+                        "enum": ["retrieve", "store"]
+                    },
+                    "query": {
+                        "type": "string",
+                        "description": "检索关键词 (当 action='retrieve' 时必填)。用于查找相似的历史记录。"
                     },
                     "content": {
                         "type": "string",
-                        "description": "要存储的文本内容，或者用于检索的查询语句。"
+                        "description": "要存储的文本内容 (当 action='store' 时必填)。"
+                    },
+                    "task_id": {
+                        "type": "string",
+                        "description": "关联的任务 ID (当 action='store' 时必填)。"
+                    },
+                    "agent_role": {
+                        "type": "string",
+                        "description": "存储数据的 Agent 角色名 (当 action='store' 时必填)。"
                     }
                 },
-                "required": ["action", "content"]
+                "required": ["action"]
             }
         }
 
