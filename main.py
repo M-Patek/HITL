@@ -1,11 +1,10 @@
 import sys
-import random
 import asyncio
 import base64
 import os
-import json
-import time  # 新增: 用于生成时间戳
-import re    # 新增: 用于处理文件名中的非法字符
+import time
+import re
+from datetime import datetime
 from typing import Tuple, Optional
 from dotenv import load_dotenv
 from langgraph.checkpoint.memory import MemorySaver
@@ -25,62 +24,135 @@ from tools.search import GoogleSearchTool
 # 导入工作流构建器
 from workflow.graph import build_agent_workflow
 
+# 全局控制事件
+running_event = asyncio.Event()
+running_event.set()
+
 def get_user_input() -> Tuple[str, Optional[str]]:
-    """交互式获取用户输入 (支持图片路径)"""
+    """交互式获取初始用户输入"""
     print("\n" + "="*50)
-    print("🤖 Gemini Multi-Agent Swarm System (HITL Mode)")
+    print("🤖 HITL 自动驾驶系统 (双线程实时干预版)")
     print("="*50)
-    print("请输入您的复杂任务 (例如: '分析这张图表的趋势'):")
+    print("请输入您的初始任务:")
     task = input(">>> 任务描述: ").strip()
     if not task:
         print("❌ 输入为空，退出程序。")
         sys.exit(0)
-        
-    print("请输入图片路径 (可选，直接回车跳过):")
-    img_path = input(">>> 图片路径: ").strip()
-    
-    encoded_image = None
-    if img_path:
-        # 去除可能存在的引号
-        img_path = img_path.strip('"').strip("'")
-        if os.path.exists(img_path):
-            try:
-                with open(img_path, "rb") as image_file:
-                    encoded_image = base64.b64encode(image_file.read()).decode('utf-8')
-                print(f"🖼️ 图片加载成功: {os.path.basename(img_path)}")
-            except Exception as e:
-                print(f"⚠️ 图片加载失败: {e}")
-        else:
-            print(f"⚠️ 文件未找到: {img_path}")
-            
-    return task, encoded_image
+    return task, None
 
-def save_output_images(folder_name: str, image_artifacts: list):
-    """保存生成的图片到 D 盘指定目录"""
-    if not image_artifacts:
-        return
+async def input_listener(app, config):
+    """
+    🎧 上帝视角监听器
+    支持命令：
+    - timeline: 查看最近的操作记录（带时间戳）
+    - log: 查看最近一次的详细输出
+    - trace: 查看 SIG-HA 原始指纹（硬核溯源）
+    - q: 退出
+    - (其他任何文字): 视为即时干预指令，直接修改运行方向
+    """
+    print("\n🎧 [系统] 实时交互已就绪。")
+    print("   输入 'timeline' 查看刚才发生了什么，或直接输入指令修改任务。")
+    
+    while running_event.is_set():
+        # 异步等待输入，不阻塞主流程
+        try:
+            user_text = await asyncio.get_event_loop().run_in_executor(None, input)
+            user_text = user_text.strip()
+        except EOFError:
+            break
         
-    # [修改点 1] 设置你的 D 盘目标根目录
-    # 注意：Windows 路径前加 r 可以防止转义字符报错
-    base_save_path = r"D:\SwarmTasks" 
-    
-    # 拼接完整的保存路径，例如: D:\SwarmTasks\20231027-1030_分析图表任务
-    output_dir = os.path.join(base_save_path, folder_name)
-    
-    # 如果目录不存在则创建
-    os.makedirs(output_dir, exist_ok=True)
-    
-    for img in image_artifacts:
-        filename = img.get('filename', 'unknown.png')
-        b64_data = img.get('data', '')
-        if b64_data:
-            try:
-                file_path = os.path.join(output_dir, filename)
-                with open(file_path, "wb") as f:
-                    f.write(base64.b64decode(b64_data))
-                print(f"💾 [Output] 图片已保存到 D 盘: {file_path}")
-            except Exception as e:
-                print(f"⚠️ 保存图片失败 {filename}: {e}")
+        if not user_text: continue
+
+        # === 1. 退出 ===
+        if user_text.lower() in ['q', 'quit', 'exit']:
+            print("🛑 [系统] 正在停止...")
+            running_event.clear()
+            break
+            
+        # === 2. 查时间线 (解决“刚才谁动了”的问题) ===
+        elif user_text.lower() == 'timeline':
+            snapshot = app.get_state(config)
+            if snapshot and snapshot.values.get('project_state'):
+                ps = snapshot.values['project_state']
+                history = ps.trace_history[-15:] # 看最近15步
+                print(f"\n🕒 [最近活动时间线] (当前时间: {datetime.now().strftime('%H:%M:%S')})")
+                for item in history:
+                    # 将时间戳转换为可读格式
+                    ts = datetime.fromtimestamp(item['timestamp']).strftime('%H:%M:%S')
+                    print(f"   ⏱️ {ts} | 👤 {item['agent'].ljust(15)} | 深度: {item['depth']}")
+            else:
+                print("⚠️ 暂无历史记录。")
+
+        # === 3. 查详细日志 (查看具体内容) ===
+        elif user_text.lower() == 'log':
+            snapshot = app.get_state(config)
+            if snapshot and snapshot.values.get('project_state'):
+                ps = snapshot.values['project_state']
+                # 尝试获取最近一个节点的输出
+                active_node = ps.get_active_node()
+                if active_node:
+                    print(f"\n📄 [节点 {active_node.name} 的当前指令]:")
+                    print(f"   {active_node.instruction}")
+                    print(f"\n💬 [最近上下文摘要]:")
+                    for msg in reversed(active_node.local_history):
+                        if msg.get('role') != 'system':
+                            content = msg.get('parts', [{}])[0].get('text', '')[:200]
+                            print(f"   ({msg.get('role')}): {content}...")
+                            break
+            else:
+                print("⚠️ 无法获取日志。")
+
+        # === 4. 原始溯源 (SIG-HA) ===
+        elif user_text.lower() == 'trace':
+            snapshot = app.get_state(config)
+            ps = snapshot.values.get('project_state') if snapshot else None
+            if ps:
+                print(f"\n🔐 [SIG-HA 实时签名] 当前指纹: {ps.trace_t[:30]}...")
+            else:
+                print("⚠️ 状态未初始化。")
+
+        # === 5. 即时修改 (Intervention) ===
+        else:
+            print(f"⚡ [介入] 收到神谕: '{user_text}'")
+            print("   正在强行注入任务流...")
+            
+            # 获取最新状态
+            snapshot = app.get_state(config)
+            current_ps = snapshot.values.get('project_state')
+            
+            if current_ps:
+                # 关键点：我们将用户的输入放入 'user_feedback_queue'
+                # Orchestrator 在下一次醒来时（甚至当前如果正好在做决定时）会读到这个字段
+                current_ps.user_feedback_queue = f"⚠️ [USER INTERRUPT]: {user_text}"
+                
+                # 立即更新状态，不需要等待节点结束
+                app.update_state(config, {"project_state": current_ps})
+                print("✅ 指令注入成功！下个节点将执行您的变更。")
+
+async def run_workflow_loop(app, config, initial_input):
+    """主工作流循环"""
+    print("🚀 任务自动驾驶模式已启动...")
+    try:
+        # stream_mode="values" 让我们可以看到每一步的变化
+        async for event in app.astream(initial_input, config=config, stream_mode="values"):
+            if not running_event.is_set(): 
+                break
+            
+            if 'project_state' in event:
+                ps = event['project_state']
+                # 如果有新产生的计划，打印出来让用户知道进度
+                if ps.next_step:
+                    agent = ps.next_step.get('agent_name', 'Unknown')
+                    instr = ps.next_step.get('instruction', '')[:30]
+                    print(f"   🔄 [运行中] {agent} -> {instr}...")
+                    
+    except Exception as e:
+        print(f"\n💥 工作流异常退出: {e}")
+        import traceback
+        traceback.print_exc()
+    finally:
+        print("\n🏁 工作流结束。")
+        running_event.clear()
 
 async def main():
     # 1. 基础检查
@@ -90,7 +162,7 @@ async def main():
 
     # 2. 初始化工具链
     print("\n🔧 正在初始化工具链...")
-    rotator = GeminiKeyRotator(GEMINI_API_KEYS) # 注意：这里假设 Rotator 初始化参数已适配
+    rotator = GeminiKeyRotator(GEMINI_API_KEYS)
     memory = VectorMemoryTool(PINECONE_API_KEY, PINECONE_ENVIRONMENT, VECTOR_INDEX_NAME)
     search = GoogleSearchTool()
     
@@ -99,135 +171,37 @@ async def main():
 
     # 3. 构建图 (Agent Workflow)
     print("🕸️ 正在构建 Agent 工作流图...")
+    # 注意：这里我们传入 checkpointer，让子图也能共享（如果我们在 build_agent_workflow 里处理好的话）
     app = build_agent_workflow(rotator, memory, search, checkpointer=checkpointer)
 
     # 4. 准备初始状态
-    initial_task, initial_image = get_user_input()
+    initial_task, _ = get_user_input()
     
-    # [修改点 2] 生成更有意义的文件夹名 (Task ID)
-    # 获取当前时间，格式如: 20231027-1030
-    timestamp = time.strftime("%Y%m%d-%H%M")
-    
-    # 提取任务描述的前10个字作为文件名的一部分，去掉特殊字符防止路径报错
-    safe_task_name = re.sub(r'[\\/*?:"<>|]', "", initial_task)[:10]
-    if not safe_task_name:
-        safe_task_name = "未命名任务"
-        
-    # 组合成新的 ID: 20231027-1030_分析这张图表
-    task_folder_name = f"{timestamp}_{safe_task_name}"
-    
-    # 构建初始消息 parts
+    task_id = f"AutoTask_{int(time.time())}"
     user_parts = [{"text": initial_task}]
     
     project_state = ProjectState(
-        task_id=task_folder_name, # 使用生成的文件夹名作为 task_id
+        task_id=task_id,
         user_input=initial_task,
-        image_data=initial_image, # 存入状态
         full_chat_history=[{"role": "user", "parts": user_parts}]
     )
     
-    # 配置 Thread ID 以支持状态持久化和中断恢复
-    thread_id = "1"
+    # 主线程 ID
+    thread_id = "main_thread_1"
     config = {"configurable": {"thread_id": thread_id}}
     
-    print(f"\n🚀 开始执行任务: {project_state.task_id} (Thread: {thread_id})")
+    print(f"\n🚀 开始执行任务: {task_id}")
     
-    # 初始输入
-    current_input = {"project_state": project_state}
+    initial_input = {"project_state": project_state}
 
-    # 5. 运行主循环 (Handling Interrupts & Resume)
-    while True:
-        try:
-            # A. 执行工作流 (直到结束或遇到中断点)
-            # stream_mode="values" 可以获取每一步的状态快照
-            async for event in app.astream(current_input, config=config, stream_mode="values"):
-                if 'project_state' not in event: continue
-                ps = event['project_state']
-                
-                # 实时反馈决策
-                if ps.next_step:
-                     print(f"   🔮 [Plan] 下一步: {ps.next_step.get('agent_name')} -> {ps.next_step.get('instruction')[:50]}...")
-
-                # 检查是否有新生成的图片产物并保存
-                if ps.artifacts.get("images"):
-                    save_output_images(ps.task_id, ps.artifacts["images"])
-                    # 清空以防重复保存（可选，视逻辑而定）
-                    # ps.artifacts["images"] = [] 
-
-            # B. 检查执行状态
-            snapshot = app.get_state(config)
-            
-            # 如果没有下一步，说明流程自然结束
-            if not snapshot.next:
-                print("\n✅ 工作流执行完毕。")
-                # 打印最终结果
-                final_state = snapshot.values.get('project_state')
-                if final_state:
-                    if final_state.final_report:
-                        print("\n📄 [最终报告]:")
-                        print(final_state.final_report)
-                    
-                    # 再次检查是否有遗漏的图片需要保存
-                    if final_state.artifacts.get("images"):
-                        save_output_images(final_state.task_id, final_state.artifacts["images"])
-                break
-            
-            # C. 处理中断 (HITL Interaction)
-            print(f"\n⏸️ [HITL] 工作流在 [{snapshot.next[0]}] 前暂停")
-            
-            # 获取当前上下文以便展示
-            current_ps = snapshot.values['project_state']
-            if current_ps.next_step:
-                print(f"   👉 待执行动作: {current_ps.next_step.get('agent_name')}")
-                print(f"   📝 指令内容: {current_ps.next_step.get('instruction')}")
-            
-            print("\n选项: [A]pprove (批准执行), [F]eedback (修改指令/反馈), [Q]uit (退出)")
-            user_choice = input(">>> 请选择: ").strip().lower()
-            
-            if user_choice == 'a':
-                print("👍 已批准。继续执行...")
-                current_input = None # Resume
-            
-            elif user_choice == 'f':
-                new_instruction = input("✏️  输入新指令 (回车保持原样): ").strip()
-                new_feedback = input("💬 输入反馈上下文 (可选): ").strip()
-                
-                # [New] 支持在中断时补充图片
-                new_img_path = input("🖼️  补充图片路径 (可选): ").strip()
-                
-                if new_instruction:
-                    current_ps.next_step['instruction'] = new_instruction
-                    print("✅ 指令已更新。")
-                
-                if new_feedback:
-                    current_ps.user_feedback_queue = f"用户干预: {new_feedback}"
-                    print("✅ 反馈已加入队列。")
-                    
-                if new_img_path:
-                    new_img_path = new_img_path.strip('"').strip("'")
-                    if os.path.exists(new_img_path):
-                         with open(new_img_path, "rb") as f:
-                             # 更新状态中的图片数据，这会覆盖之前的图片
-                             # 如果支持多图，需要改为列表
-                             current_ps.image_data = base64.b64encode(f.read()).decode('utf-8')
-                         print("✅ 新图片已加载。")
-
-                # 更新图状态
-                print("⏳ 正在更新状态...")
-                app.update_state(config, {"project_state": current_ps})
-                
-                print("🔄 携带更新后的状态继续...")
-                current_input = None 
-                
-            else:
-                print("🛑 用户停止了任务。")
-                break
-
-        except Exception as e:
-            print(f"\n💥 运行时错误: {e}")
-            import traceback
-            traceback.print_exc()
-            break
+    # 5. 双线程启动
+    workflow_task = asyncio.create_task(run_workflow_loop(app, config, initial_input))
+    listener_task = asyncio.create_task(input_listener(app, config))
+    
+    await asyncio.gather(workflow_task, listener_task)
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("\n👋 Bye!")
