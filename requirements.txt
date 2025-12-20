@@ -8,7 +8,8 @@ sse-starlette
 
 # --- AI & LLM Orchestration ---
 langgraph
-google-genai
+# [Fix] 更改为与代码中 import google.generativeai 兼容的包
+google-generativeai>=0.8.0 
 tiktoken
 
 # --- Vector Database ---
@@ -18,6 +19,8 @@ pinecone-client
 httpx
 curl_cffi>=0.6.2
 aiohttp>=3.9.0
+# [Fix] 显式添加 core/rotator.py 依赖的 requests
+requests>=2.31.0
 
 # --- Database & Monitoring ---
 redis>=5.0.1
