@@ -1,12 +1,14 @@
-from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
 import time
 import asyncio
+import json
 import logging
+from collections import defaultdict
 
 from config.keys import GEMINI_API_KEYS, PINECONE_API_KEY, PINECONE_ENVIRONMENT, VECTOR_INDEX_NAME
 from core.rotator import GeminiKeyRotator
@@ -14,141 +16,223 @@ from tools.memory import VectorMemoryTool
 from tools.search import GoogleSearchTool
 from workflow.graph import build_agent_workflow
 from langgraph.checkpoint.memory import MemorySaver
-from core.models import ProjectState  # Added Import
+from core.models import ProjectState
 
 # 配置日志
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("api_server")
 
 # 初始化 App
-app = FastAPI(title="Gemini HITL API", version="1.0.0")
+app = FastAPI(title="Gemini HITL API", version="2.0.0")
 
 # --- 1. CORS 配置 (允许跨域) ---
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # 生产环境建议指定具体域名
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# 初始化全局状态 (模拟单例)
+# 初始化全局组件
 checkpointer = MemorySaver()
 rotator = GeminiKeyRotator(GEMINI_API_KEYS)
 memory = VectorMemoryTool(PINECONE_API_KEY, PINECONE_ENVIRONMENT, VECTOR_INDEX_NAME)
 search = GoogleSearchTool()
 
-# 构建图 (复用逻辑)
+# 构建工作流图
 workflow_app = build_agent_workflow(rotator, memory, search, checkpointer=checkpointer)
+
+# --- 事件流管理器 (核心升级) ---
+class EventStreamManager:
+    def __init__(self):
+        # 存储每个任务的事件队列: task_id -> asyncio.Queue
+        self.active_streams: Dict[str, asyncio.Queue] = {}
+
+    async def create_stream(self, task_id: str) -> asyncio.Queue:
+        queue = asyncio.Queue()
+        self.active_streams[task_id] = queue
+        return queue
+
+    async def push_event(self, task_id: str, event_type: str, data: Any):
+        if task_id in self.active_streams:
+            # 构造 SSE 格式的数据包
+            payload = {"type": event_type, "timestamp": time.strftime("%H:%M:%S"), "data": data}
+            await self.active_streams[task_id].put(payload)
+
+    async def close_stream(self, task_id: str):
+        if task_id in self.active_streams:
+            await self.active_streams[task_id].put(None) # 发送结束信号
+            del self.active_streams[task_id]
+
+stream_manager = EventStreamManager()
 
 # --- API Models ---
 
 class TaskRequest(BaseModel):
     task: str
 
-class FeedbackRequest(BaseModel):
-    feedback: str
-    thread_id: str
+class InterventionRequest(BaseModel):
+    task_id: str
+    command: str
 
 # --- Helper Functions ---
 
-async def run_workflow_background(app_workflow, initial_input: Dict, config: Dict):
-    """后台运行工作流的任务函数"""
+async def run_workflow_background(task_id: str, initial_input: Dict, config: Dict):
+    """
+    后台运行工作流，并将事件实时推送到 SSE 队列
+    """
     thread_id = config["configurable"]["thread_id"]
-    logger.info(f"🚀 [Background] Workflow started for thread: {thread_id}")
+    logger.info(f"🚀 [Background] Workflow started for: {task_id}")
+    
+    await stream_manager.push_event(task_id, "macro_log", {
+        "agent": "System", "message": "Workflow Initialized.", "run_id": None
+    })
+
     try:
-        # stream_mode="values" 确保状态被持久化到 checkpointer
-        async for event in app_workflow.astream(initial_input, config=config, stream_mode="values"):
+        # stream_mode="values" 获取状态快照
+        async for event in workflow_app.astream(initial_input, config=config, stream_mode="values"):
             if 'project_state' in event:
-                ps = event['project_state']
+                ps: ProjectState = event['project_state']
+                
+                # 1. 捕获宏观决策 (Macro Log)
                 if ps.next_step:
-                    logger.info(f"   🔄 [Running] {ps.next_step.get('agent_name')} -> {ps.next_step.get('instruction')[:30]}...")
+                    agent_name = ps.next_step.get('agent_name', 'Unknown')
+                    instruction = ps.next_step.get('instruction', '')
+                    run_id = ps.next_step.get('run_id')
+                    
+                    await stream_manager.push_event(task_id, "macro_log", {
+                        "agent": agent_name,
+                        "message": f"Executing: {instruction[:50]}...",
+                        "run_id": run_id
+                    })
+
+                # 2. 捕获产出物 (Artifacts)
+                # 检查 code_blocks 或 images 的变化 (这里简化处理，实际可做 diff)
+                if ps.artifacts.get("images"):
+                    for img in ps.artifacts["images"][-1:]: # 推送最新的
+                         await stream_manager.push_event(task_id, "artifact", {
+                             "type": "image", 
+                             "label": img.get('filename', 'output.png'), 
+                             "content": img.get('data') # Base64
+                         })
+
+                # 3. 模拟捕获微观日志 (Micro Log)
+                # 在真实场景中，这里应该从 ps.active_node.local_history 中提取
+                # 为了配合您的前端演示，我们这里发一个信号让前端去刷新子日志
+                if ps.next_step and ps.next_step.get('run_id'):
+                     await stream_manager.push_event(task_id, "micro_log_signal", {
+                         "run_id": ps.next_step.get('run_id'),
+                         "status": "processing"
+                     })
+
     except Exception as e:
-        logger.error(f"💥 [Background] Workflow failed: {e}", exc_info=True)
+        logger.error(f"💥 Workflow failed: {e}", exc_info=True)
+        await stream_manager.push_event(task_id, "error", str(e))
     finally:
-        logger.info(f"🏁 [Background] Workflow finished for thread: {thread_id}")
+        logger.info(f"🏁 Workflow finished: {task_id}")
+        await stream_manager.push_event(task_id, "macro_log", {
+            "agent": "System", "message": "Task Completed.", "run_id": None
+        })
+        await stream_manager.close_stream(task_id)
 
 # --- Endpoints ---
 
 @app.get("/health")
 async def health_check():
-    """系统监控健康检查"""
-    return {
-        "status": "healthy", 
-        "uptime": time.time(),
-        "service": "Gemini HITL API"
-    }
+    return {"status": "healthy", "service": "Gemini Commander API"}
 
 @app.post("/api/start_task")
 async def start_task(req: TaskRequest, background_tasks: BackgroundTasks):
-    """
-    启动新任务 (后台异步运行)
-    """
+    """启动任务并准备流"""
     if not req.task:
-        raise HTTPException(status_code=400, detail="Task description is required")
+        raise HTTPException(status_code=400, detail="Task required")
 
-    # 生成 ID
-    task_id = f"api_task_{int(time.time())}"
+    task_id = f"task_{int(time.time())}"
     thread_id = f"thread_{task_id}"
     
     # 初始化 State
     user_parts = [{"text": req.task}]
-    project_state = ProjectState(
+    ps = ProjectState(
         task_id=task_id,
         user_input=req.task,
         full_chat_history=[{"role": "user", "parts": user_parts}]
     )
     
-    initial_input = {"project_state": project_state}
+    initial_input = {"project_state": ps}
     config = {"configurable": {"thread_id": thread_id}}
     
-    # --- 2. 启动后台任务 ---
-    # 使用 FastAPI 的 BackgroundTasks 将长时间运行的工作流放入后台
-    background_tasks.add_task(run_workflow_background, workflow_app, initial_input, config)
+    # 初始化事件流队列
+    await stream_manager.create_stream(task_id)
     
-    return {
-        "status": "started", 
-        "task_id": task_id, 
-        "thread_id": thread_id,
-        "message": "Workflow is running in background"
-    }
+    # 启动后台任务
+    background_tasks.add_task(run_workflow_background, task_id, initial_input, config)
+    
+    return {"status": "started", "task_id": task_id, "thread_id": thread_id}
 
-@app.get("/api/state/{thread_id}")
-async def get_state(thread_id: str):
+@app.get("/api/stream/{task_id}")
+async def stream_events(task_id: str, request: Request):
+    """
+    SSE 实时事件流接口
+    前端使用 EventSource 连接此接口
+    """
+    async def event_generator():
+        queue = stream_manager.active_streams.get(task_id)
+        if not queue:
+            # 如果没有队列，尝试创建一个新的或者报错
+            # 这里简单处理：如果任务不存在，发送结束并退出
+            yield f"event: error\ndata: Task not found or finished\n\n"
+            return
+
+        while True:
+            # 检查客户端是否断开连接
+            if await request.is_disconnected():
+                break
+                
+            # 获取事件
+            payload = await queue.get()
+            if payload is None: # 结束信号
+                yield f"event: finish\ndata: end\n\n"
+                break
+            
+            # SSE 格式: event: type \n data: json \n\n
+            yield f"event: {payload['type']}\ndata: {json.dumps(payload['data'])}\n\n"
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
+
+@app.post("/api/intervention")
+async def inject_intervention(req: InterventionRequest):
+    """
+    HITL: 强行注入用户指令 (神谕)
+    """
+    # 找到对应的 thread_id (这里简化假设是一一对应，实际可能需要查找)
+    thread_id = f"thread_{req.task_id}"
     config = {"configurable": {"thread_id": thread_id}}
-    state = workflow_app.get_state(config)
-    if not state.values:
-        return {"error": "No state found"}
-    return state.values["project_state"]
-
-@app.get("/api/runs/{run_id}/history")
-async def get_subgraph_history(run_id: str):
-    """
-    [New] 获取子任务（Crew）的详细历史
-    前端点击“展开详情”时调用此接口
-    """
-    config = {"configurable": {"thread_id": run_id}}
     
-    # 我们需要访问子图的 checkpointer。由于 MemorySaver 是共享的，
-    # 我们可以直接查询存储在其中的子图状态。
-    # 注意：LangGraph 的 history 获取方式
     try:
-        history = []
-        async for state in workflow_app.aget_state_history(config):
-            # 提取关键信息
-            val = state.values
-            step_info = {
-                "created_at": state.created_at,
-                "node": state.next, # 或者 active node
-                "code": val.get("generated_code", ""),
-                "feedback": val.get("review_feedback", ""),
-                "stderr": val.get("execution_stderr", "")
-            }
-            history.append(step_info)
+        # 获取当前状态
+        state = workflow_app.get_state(config)
+        if not state.values:
+             raise HTTPException(status_code=404, detail="Task state not found")
+             
+        ps: ProjectState = state.values['project_state']
         
-        return {"history": history, "run_id": run_id}
+        # 注入高优先级反馈
+        ps.user_feedback_queue = f"⚠️ [INTERVENTION]: {req.command}"
+        
+        # 立即更新状态
+        workflow_app.update_state(config, {"project_state": ps})
+        
+        await stream_manager.push_event(req.task_id, "macro_log", {
+            "agent": "Human (HITL)", 
+            "message": f"Intervention injected: {req.command}",
+            "run_id": None
+        })
+        
+        return {"status": "injected", "message": "God mode command received"}
+        
     except Exception as e:
-        return {"error": str(e)}
+        raise HTTPException(status_code=500, detail=str(e))
 
-# 挂载静态文件 (前端)
+# 挂载静态文件
 app.mount("/", StaticFiles(directory="static", html=True), name="static")
