@@ -1,3 +1,4 @@
+from typing import Any
 from langgraph.graph import StateGraph, END
 from core.rotator import GeminiKeyRotator
 from agents.crews.coding_crew.state import CodingCrewState
@@ -9,25 +10,21 @@ def route_review(state: CodingCrewState) -> str:
     count = state.get("iteration_count", 0)
     
     if status == "approve":
-        print("✅ [Coding Crew] 代码通过审查，进入总结阶段。")
-        return "summarize" # 跳转到 Summarizer
+        return "summarize"
     elif count >= 5: 
-        print("⚠️ [Coding Crew] 达到最大迭代限制，强制总结。")
         return "summarize"
     else:
         return "retry"
 
-def build_coding_crew_graph(rotator: GeminiKeyRotator) -> StateGraph:
+def build_coding_crew_graph(rotator: GeminiKeyRotator, checkpointer: Any = None) -> StateGraph:
     nodes = CodingCrewNodes(rotator)
     workflow = StateGraph(CodingCrewState)
     
-    # 定义节点
     workflow.add_node("coder", nodes.coder_node)
     workflow.add_node("executor", nodes.executor_node)
     workflow.add_node("reviewer", nodes.reviewer_node)
-    workflow.add_node("summarizer", nodes.summarizer_node) # [New]
+    workflow.add_node("summarizer", nodes.summarizer_node)
     
-    # 定义流程
     workflow.set_entry_point("coder")
     
     workflow.add_edge("coder", "executor")
@@ -42,7 +39,7 @@ def build_coding_crew_graph(rotator: GeminiKeyRotator) -> StateGraph:
         }
     )
     
-    # 总结完就结束
     workflow.add_edge("summarizer", END)
     
-    return workflow.compile()
+    # [Update] 传入 checkpointer 以支持子图的历史记录查询
+    return workflow.compile(checkpointer=checkpointer)
