@@ -1,25 +1,52 @@
-import json
-import asyncio
 import os
-import uuid
-import logging
+import uvicorn
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 
+# 加载环境变量
 load_dotenv()
 
-from fastapi import FastAPI, Request, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
-from sse_starlette.sse import EventSourceResponse
+from workflow.engine import SwarmEngine
+from core.models import UserInput, TaskStatus
+from core.rotator import GeminiKeyRotator
+from tools.memory import VectorMemoryTool
+from tools.search import GoogleSearchTool
+from config.keys import (
+    GATEWAY_API_BASE, 
+    GATEWAY_SECRET,
+    PINECONE_API_KEY,
+    PINECONE_ENVIRONMENT,
+    VECTOR_INDEX_NAME
+)
 
-from core.logger_setup import setup_logging, trace_id_ctx
-from core.api_models import TaskRequest, FeedbackRequest
-from workflow.engine import run_workflow, GLOBAL_CHECKPOINTER, _rotator, _memory_tool
+# --- 初始化核心组件 ---
 
-setup_logging("SWARM-Brain")
-logger = logging.getLogger("API")
+# 1. Rotator (LLM Gateway)
+_rotator = GeminiKeyRotator(base_url=GATEWAY_API_BASE, api_key=GATEWAY_SECRET)
 
-app = FastAPI(title="Gemini Agent System API")
+# 2. Tools
+_memory_tool = VectorMemoryTool(
+    api_key=PINECONE_API_KEY,
+    environment=PINECONE_ENVIRONMENT,
+    index_name=VECTOR_INDEX_NAME
+)
+_search_tool = GoogleSearchTool()
+
+# 3. Swarm Engine
+engine = SwarmEngine(
+    rotator=_rotator,
+    memory_tool=_memory_tool,
+    search_tool=_search_tool
+)
+
+# --- FastAPI App ---
+app = FastAPI(
+    title="Gemini Swarm HITL API",
+    description="Human-in-the-Loop Orchestration Backend",
+    version="2.0.0"
+)
 
 app.add_middleware(
     CORSMiddleware,
@@ -29,81 +56,55 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.mount("/static", StaticFiles(directory="static"), name="static")
-
-@app.middleware("http")
-async def trace_id_middleware(request: Request, call_next):
-    req_id = str(uuid.uuid4())
-    token = trace_id_ctx.set(req_id)
-    try:
-        logger.info("request_started", extra={"extra_data": {
-            "path": request.url.path,
-            "method": request.method
-        }})
-        response = await call_next(request)
-        response.headers["X-Trace-ID"] = req_id
-        return response
-    finally:
-        trace_id_ctx.reset(token)
+# --- Routes ---
 
 @app.get("/system/status")
-async def get_system_status():
-    gateway_status = _rotator.check_gateway_health()
-    memory_status = "active" if _memory_tool.is_active else "mock_mode"
+async def health_check():
+    """检查系统组件健康状态"""
+    # 修复：_memory_tool 使用 .enabled 而不是 .is_active
+    memory_status = "active" if _memory_tool.enabled else "mock_mode"
+    
+    # 修复：Rotator 现在有了 check_gateway_health 方法 (在 core/rotator.py 中修复)
+    llm_status = _rotator.check_gateway_health()
+    
     return {
-        "service": "SWARM-Brain",
-        "role": "Orchestrator",
-        "health": "ok",
-        "dependencies": {
-            "gateway": gateway_status,
-            "memory_storage": memory_status
+        "status": "online",
+        "components": {
+            "llm_gateway": llm_status,
+            "memory_db": memory_status,
+            "engine": "ready"
         }
     }
 
-@app.post("/stream_task")
-async def stream_task(body: TaskRequest, request: Request):
-    """
-    [Phase 4] Supports parallel heartbeat streaming via SSE
-    """
-    async def event_generator():
-        workflow_stream = run_workflow(
-            user_input=body.user_input, 
-            thread_id=body.thread_id
-        )
+@app.post("/task/create")
+async def create_task(input_data: UserInput):
+    """创建新任务"""
+    try:
+        task_id = engine.create_task(input_data.prompt)
+        return {"task_id": task_id, "status": "initialized"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
-        try:
-            async for event_data in workflow_stream:
-                if await request.is_disconnected():
-                    logger.info("client_disconnected")
-                    break
-                
-                # 直接序列化 workflow 产生的所有事件 (包括 heartbeats)
-                yield {
-                    "event": event_data["event_type"],
-                    "data": json.dumps(event_data["data"], ensure_ascii=False)
-                }
-                # 动态调整频率：如果是 heartbeat，间隔可以更短；如果是 heavy artifact，可以稍长
-                # 这里保持统一心跳节奏
-                await asyncio.sleep(0.01)
+@app.get("/task/{task_id}/stream")
+async def stream_task_events(task_id: str):
+    """SSE 端点：流式传输任务进度"""
+    return StreamingResponse(
+        engine.stream_task_events(task_id),
+        media_type="text/event-stream"
+    )
 
-        except Exception as e:
-            logger.error("stream_error", exc_info=True)
-            yield {
-                "event": "error",
-                "data": json.dumps({"error": str(e)}, ensure_ascii=False)
-            }
-
-    return EventSourceResponse(event_generator())
-
-@app.post("/feedback")
-async def submit_feedback(body: FeedbackRequest):
-    thread_id = body.thread_id
-    if not thread_id:
-        raise HTTPException(status_code=400, detail="Thread ID is required")
-    logger.info(f"feedback_received", extra={"extra_data": {"thread": thread_id}})
-    return {"status": "received", "message": "Feedback queued."}
+@app.post("/task/{task_id}/feedback")
+async def submit_feedback(task_id: str, feedback: dict):
+    """提交用户反馈 (HITL)"""
+    content = feedback.get("content")
+    if not content:
+        raise HTTPException(status_code=400, detail="Feedback content required")
+    
+    success = engine.submit_user_feedback(task_id, content)
+    if not success:
+        raise HTTPException(status_code=404, detail="Task not found")
+        
+    return {"status": "feedback_received"}
 
 if __name__ == "__main__":
-    import uvicorn
-    print("🚀 Starting API Server on http://0.0.0.0:8000")
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run("api_server:app", host="0.0.0.0", port=8000, reload=True)
