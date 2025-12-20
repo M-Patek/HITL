@@ -1,31 +1,42 @@
-# --- Core Framework & Web Server ---
+--- Core Framework & Web Server ---
+
 fastapi>=0.109.0
 uvicorn[standard]>=0.27.0
 pydantic>=2.6.0
 python-dotenv>=1.0.0
 python-multipart>=0.0.9
-sse-starlette
 
-# --- AI & LLM Orchestration ---
-langgraph
-# [Fix] 更改为与代码中 import google.generativeai 兼容的包
-google-generativeai>=0.8.0 
+[Cleanup] Removed unused sse-starlette
+
+--- AI & LLM Orchestration ---
+
+langgraph==0.0.26
+
+[Fix] 更改为与代码中 import google.generativeai 兼容的包
+
+google-generativeai>=0.8.0
 tiktoken
 
-# --- Vector Database ---
+--- Vector Database ---
+
 pinecone-client
 
-# --- HTTP Clients & Engine ---
+--- HTTP Clients & Engine ---
+
 httpx
 curl_cffi>=0.6.2
 aiohttp>=3.9.0
-# [Fix] 显式添加 core/rotator.py 依赖的 requests
+
+[Fix] 显式添加 core/rotator.py 依赖的 requests
+
 requests>=2.31.0
 
-# --- Database & Monitoring ---
+--- Database & Monitoring ---
+
 redis>=5.0.1
 prometheus-fastapi-instrumentator>=7.0.0
 
-# --- [SWARM 2.0 New Dependencies] ---
+--- [SWARM 2.0 New Dependencies] ---
+
 docker>=7.0.0      # 用于代码沙箱
 tavily-python      # 用于真实搜索
