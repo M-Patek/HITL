@@ -34,6 +34,9 @@ class TaskNode(BaseModel):
     # 节点的协议状态
     stage_protocol: StageProtocol = Field(default_factory=StageProtocol)
 
+    class Config:
+        arbitrary_types_allowed = True
+
 # =======================================================
 # 基础工件模型 (Artifacts)
 # =======================================================
@@ -83,7 +86,7 @@ class ProjectState(BaseModel):
     # --- 状态机控制 ---
     next_step: Optional[Dict[str, Any]] = None  # e.g., {"agent_name": "coding_crew", "instruction": "..."}
     router_decision: str = "orchestrator" # router decision buffer
-    plan: str = ""  # 全局计划文本
+    plan: str = ""  # 全局计划文本 (JSON String from Planner)
     
     # --- 记忆与历史 ---
     # 兼容 OpenAI/LangChain 格式的消息历史 (全局)
